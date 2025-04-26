@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Background Instructions</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        h1 {
+            color: #333;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 10px;
+        }
+        .step {
+            margin-bottom: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+        }
+        code {
+            background-color: #eee;
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-family: monospace;
+        }
+        .tip {
+            background-color: #e6f7ff;
+            border-left: 4px solid #1890ff;
+            padding: 10px 15px;
+            margin: 15px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>How to Add a Video Background to Sound and Color</h1>
+    
+    <div class="step">
+        <h2>Step 1: Prepare a Video File</h2>
+        <p>Create or obtain an MP4 video file that will serve as your background. Ideally, this video should:</p>
+        <ul>
+            <li>Be in MP4 format (most widely supported)</li>
+            <li>Have a resolution that matches or exceeds your display resolution</li>
+            <li>Be visually simple enough not to distract from the audio visualizations</li>
+            <li>Loop seamlessly if possible</li>
+            <li>Be relatively short (10-30 seconds) to keep the file size reasonable</li>
+        </ul>
+    </div>
+    
+    <div class="step">
+        <h2>Step 2: Name and Place the Video File</h2>
+        <p>Name your video file <code>video-background.mp4</code> and place it in the same directory as your <code>index.html</code> file.</p>
+        
+        <div class="tip">
+            <p><strong>Tip:</strong> If your video has a different name or format, you'll need to update the <code>&lt;source&gt;</code> tag in the HTML file accordingly.</p>
+        </div>
+        
+        <div class="tip">
+            <p><strong>No video file?</strong> You can use the "Use Sample Video" toggle in the control panel to use our pre-selected online video instead of a local file!</p>
+        </div>
+    </div>
+    
+    <div class="step">
+        <h2>Step 3: Adjust Video Settings (Optional)</h2>
+        <p>You can adjust how the video looks by modifying these properties in the JavaScript:</p>
+        <ul>
+            <li>Opacity: Change <code>videoBackground.style.opacity = '0.8';</code> to a value between 0 (invisible) and 1 (fully opaque)</li>
+            <li>Playback speed: Add <code>videoBackground.playbackRate = 0.5;</code> to slow down the video (values less than 1) or speed it up (values greater than 1)</li>
+        </ul>
+    </div>
+    
+    <div class="step">
+        <h2>Step 4: Enjoy!</h2>
+        <p>Once you've added the video file (or selected "Use Sample Video"), simply toggle the "Video Background" switch in the control panel to see it in action!</p>
+    </div>
+    
+    <div class="tip">
+        <p><strong>Troubleshooting:</strong> If your video doesn't appear, check the browser console for errors (F12 in most browsers). Make sure the video file is in the correct location and format.</p>
+    </div>
+</body>
+</html> 

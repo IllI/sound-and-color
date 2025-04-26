@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sound and Color</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        
+        #hydra-canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 0;
+        }
+        
+        #video-background {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            z-index: -1;
+            opacity: 0;
+            transition: opacity 0.5s ease;
+        }
+        
+        #control-panel {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            border-radius: 5px;
+            z-index: 10;
+            color: white;
+            transition: all 0.3s ease;
+        }
+        
+        #control-panel.hidden {
+            transform: translateX(calc(100% + 20px));
+        }
+        
+        #toggle-panel {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 40px;
+            height: 40px;
+            background: rgba(0, 0, 0, 0.7);
+            border-radius: 50%;
+            z-index: 20;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            font-size: 18px;
+            color: white;
+            user-select: none;
+        }
+        
+        .control-group {
+            margin-bottom: 15px;
+        }
+        
+        .control-group h3 {
+            margin: 0 0 10px 0;
+            font-size: 14px;
+            opacity: 0.8;
+        }
+        
+        .button-group {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 5px;
+        }
+        
+        .viz-button {
+            padding: 8px 10px;
+            background: rgba(255, 255, 255, 0.1);
+            border: none;
+            border-radius: 3px;
+            color: white;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s ease;
+        }
+        
+        .viz-button:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .viz-button.active {
+            background: rgba(255, 255, 255, 0.3);
+            box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.5);
+            position: relative;
+        }
+        
+        /* New styling to indicate active buttons */
+        .viz-button.active::after {
+            content: "";
+            position: absolute;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background-color: #4CAF50;
+            top: 4px;
+            right: 4px;
+        }
+        
+        /* Style to indicate a multi-button selection is active */
+        .multi-viz-active .button-group {
+            border: 1px solid rgba(75, 181, 255, 0.5);
+            border-radius: 5px;
+            padding: 2px;
+        }
+        
+        .toggle-control {
+            display: flex;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        
+        .toggle-control label {
+            margin-right: 10px;
+            font-size: 14px;
+        }
+        
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 40px;
+            height: 20px;
+        }
+        
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #444;
+            transition: .4s;
+            border-radius: 20px;
+        }
+        
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 16px;
+            width: 16px;
+            left: 2px;
+            bottom: 2px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        
+        input:checked + .toggle-slider {
+            background-color: #2196F3;
+        }
+        
+        input:checked + .toggle-slider:before {
+            transform: translateX(20px);
+        }
+    </style>
+</head>
+<body>
+    <!-- Video Background -->
+    <video id="video-background" loop muted playsinline>
+        <source src="video-background.mp4" type="video/mp4">
+        <!-- Fallback to a Creative Commons licensed video if local file not found -->
+        <source src="https://storage.googleapis.com/coverr-main/mp4/Mt_Baker.mp4" type="video/mp4">
+        Your browser does not support the video tag.
+    </video>
+    
+    <!-- Hydra Canvas -->
+    <canvas id="hydra-canvas"></canvas>
+    
+    <!-- Toggle Button -->
+    <div id="toggle-panel">☰</div>
+    
+    <!-- Control Panel -->
+    <div id="control-panel" class="hidden">
+        <div class="control-group">
+            <h3>Visualization Style</h3>
+            <div class="button-group">
+                <button class="viz-button active" data-viz="chalk">Chalk</button>
+                <button class="viz-button" data-viz="neon">Neon</button>
+                <button class="viz-button" data-viz="geometric">Geometric</button>
+                <button class="viz-button" data-viz="particles">Particles</button>
+                <button class="viz-button" data-viz="waveform">Waveform</button>
+                <button class="viz-button" data-viz="circularWave">Circular Wave</button>
+                <button class="viz-button" data-viz="fractals">Fractals</button>
+                <button class="viz-button" data-viz="frequencyGrid">Freq Grid</button>
+                <button class="viz-button" data-viz="voronoiField">Voronoi</button>
+                <button class="viz-button" data-viz="liquidLandscape">Liquid</button>
+                <button class="viz-button" data-viz="vaporwave">Vaporwave</button>
+                <button class="viz-button" data-viz="vhsTape">VHS Tape</button>
+            </div>
+        </div>
+        <div class="control-group">
+            <div class="toggle-control">
+                <label for="video-toggle">Video Background</label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="video-toggle">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            <div class="toggle-control">
+                <label for="use-sample-video">Use Sample Video</label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="use-sample-video">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Scripts -->
+    <script src="https://unpkg.com/hydra-synth"></script>
+    <script src="https://esm.sh/@vfx-js/core" type="module"></script>
+    <script src="script.js"></script>
+    <script src="vhs-effect.js"></script>
+</body>
+</html> 
