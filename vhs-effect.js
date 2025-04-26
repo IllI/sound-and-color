@@ -93,6 +93,8 @@ let lastAudioTime = 0;
 let trackingIntensity = 0;
 let vfx = null;
 let activeEffect = null;
+let isVHSActive = false;
+let lastActiveHydraViz = 'chalk'; // Store last active visualization
 
 // Function to update audio intensity from the existing audio analyzer
 function updateAudioIntensity(level) {
@@ -112,65 +114,125 @@ function updateAudioIntensity(level) {
     console.log("VHS Audio level:", audioLevel.toFixed(2));
 }
 
-// Create style for UI elements to ensure they stay on top
-function ensureUIVisibility() {
-    // Add CSS to ensure UI controls always stay on top
+// Setup a proper class-based approach that doesn't use !important
+function setupUIStructure() {
+    // Add a CSS class that doesn't override existing styles but adds proper layering
     const styleId = 'vhs-effect-styles';
     if (!document.getElementById(styleId)) {
         const style = document.createElement('style');
         style.id = styleId;
         style.textContent = `
-            #control-panel, #toggle-panel {
-                position: fixed !important;
-                z-index: 1000 !important;
+            /* Layering classes */
+            .vhs-ui-layer { 
+                position: relative;
+                z-index: 50;
             }
-            .viz-button {
-                position: relative !important;
-                z-index: 1001 !important;
+            
+            /* Optional - only applied when VHS is active */
+            .vhs-active .hydra-canvas-container {
+                z-index: 1;
             }
-            #hydra-canvas {
-                z-index: 1 !important;
+            
+            .vhs-active .vhs-ui-layer {
+                z-index: 50;
             }
-            .button-group {
-                z-index: 1001 !important;
-            }
-            .toggle-control {
-                z-index: 1001 !important;
+            
+            /* Ensure UI is always interactable */
+            .vhs-ui-control {
+                position: relative;
+                z-index: 5;
             }
         `;
         document.head.appendChild(style);
     }
     
-    // Directly set z-index on UI elements
+    // Structure the DOM properly rather than forcing z-index
     const controlPanel = document.getElementById('control-panel');
     const togglePanel = document.getElementById('toggle-panel');
-    if (controlPanel) controlPanel.style.zIndex = '1000';
-    if (togglePanel) togglePanel.style.zIndex = '1001';
     
-    // Make sure all visualization buttons are visible
+    // Add classes instead of inline styles
+    if (controlPanel && !controlPanel.classList.contains('vhs-ui-layer')) {
+        controlPanel.classList.add('vhs-ui-layer');
+    }
+    
+    if (togglePanel && !togglePanel.classList.contains('vhs-ui-layer')) {
+        togglePanel.classList.add('vhs-ui-layer');
+    }
+    
+    // Add class to buttons instead of forcing inline styles
     document.querySelectorAll('.viz-button').forEach(btn => {
-        btn.style.position = 'relative';
-        btn.style.zIndex = '1001';
+        if (!btn.classList.contains('vhs-ui-control')) {
+            btn.classList.add('vhs-ui-control');
+        }
     });
+    
+    // Wrap hydra canvas in a container if needed
+    const hydraCanvas = document.getElementById('hydra-canvas');
+    if (hydraCanvas && !hydraCanvas.parentElement.classList.contains('hydra-canvas-container')) {
+        // Only if it's not already wrapped
+        const wrapper = document.createElement('div');
+        wrapper.className = 'hydra-canvas-container';
+        wrapper.style.position = 'fixed';
+        wrapper.style.top = '0';
+        wrapper.style.left = '0';
+        wrapper.style.width = '100%';
+        wrapper.style.height = '100%';
+        
+        // Move the canvas into the wrapper
+        const parent = hydraCanvas.parentElement;
+        parent.insertBefore(wrapper, hydraCanvas);
+        wrapper.appendChild(hydraCanvas);
+    }
+}
+
+// Function to manually update visualization buttons state
+function updateVisualizationUI() {
+    document.querySelectorAll('.viz-button').forEach(btn => {
+        const vizName = btn.getAttribute('data-viz');
+        if (isVHSActive && vizName === 'vhsTape') {
+            btn.classList.add('active');
+        } else if (isVHSActive && vizName !== 'vhsTape') {
+            btn.classList.remove('active');
+        } else if (!isVHSActive && vizName === lastActiveHydraViz) {
+            btn.classList.add('active');
+        }
+    });
+}
+
+// Return to the previous visualization when VHS is deactivated
+function restorePreviousVisualization() {
+    // Find button for the last active visualization
+    const prevVizButton = document.querySelector(`.viz-button[data-viz="${lastActiveHydraViz}"]`);
+    if (prevVizButton) {
+        // Simulate a click on the previous visualization button
+        prevVizButton.click();
+    }
 }
 
 // Function to activate the VHS effect
 function activateVHSEffect(target) {
-    // Ensure UI elements stay visible
-    ensureUIVisibility();
+    // Setup proper UI structure first
+    setupUIStructure();
     
     // If already active, remove it
     if (activeEffect) {
         try {
+            document.body.classList.remove('vhs-active');
+            isVHSActive = false;
+            
             vfx.remove(activeEffect);
             activeEffect = null;
             console.log("VHS effect removed");
             
-            // Skip hydra's vhsTape visualization
+            // Find and update the VHS button
             const vhsButton = document.querySelector('.viz-button[data-viz="vhsTape"]');
             if (vhsButton) {
                 vhsButton.classList.remove('active');
             }
+            
+            // Restore previous visualization
+            restorePreviousVisualization();
+            
             return;
         } catch (error) {
             console.error("Error removing VHS effect:", error);
@@ -183,10 +245,22 @@ function activateVHSEffect(target) {
         return;
     }
     
-    // Set hydra canvas target
+    // Remember the current active visualization (that's not VHS)
+    document.querySelectorAll('.viz-button.active').forEach(btn => {
+        const vizName = btn.getAttribute('data-viz');
+        if (vizName !== 'vhsTape') {
+            lastActiveHydraViz = vizName;
+            console.log(`Saved last active visualization: ${lastActiveHydraViz}`);
+        }
+    });
+    
+    // Mark document as having VHS active
+    document.body.classList.add('vhs-active');
+    isVHSActive = true;
+    
+    // Get the canvas or a fallback target
     const hydraCanvas = document.getElementById('hydra-canvas');
-    const videoBackground = document.getElementById('video-background');
-    const effectTarget = hydraCanvas || videoBackground || target || document.body;
+    const effectTarget = hydraCanvas || target || document.body;
     
     console.log("Activating VHS effect on", effectTarget);
     
@@ -196,17 +270,15 @@ function activateVHSEffect(target) {
             shader: vhsShader,
             uniforms: {
                 time: () => performance.now() / 1000,
-                noiseAmount: () => 0.03 + Math.random() * 0.03, // Reduced base noise
-                trackingOffset: () => trackingIntensity, // Use the smoothed tracking intensity
-                rgbOffset: () => Math.max(0.1, audioLevel * 3.0), // Minimum value to avoid complete disappearance
-                scanlineIntensity: () => Math.max(0.1, audioLevel * 0.7) // Minimum value for subtle effect
+                noiseAmount: () => 0.03 + Math.random() * 0.03,
+                trackingOffset: () => trackingIntensity,
+                rgbOffset: () => Math.max(0.1, audioLevel * 3.0),
+                scanlineIntensity: () => Math.max(0.1, audioLevel * 0.7)
             }
         });
         
         console.log("VHS effect activated successfully");
-        
-        // Ensure UI remains visible
-        setTimeout(ensureUIVisibility, 100);
+        updateVisualizationUI();
     } catch (error) {
         console.error("Failed to activate VHS effect:", error);
     }
@@ -217,8 +289,8 @@ window.addEventListener('load', async () => {
     try {
         console.log("Window loaded, initializing VFX");
         
-        // Ensure UI elements stay on top
-        ensureUIVisibility();
+        // Setup UI structure before anything else
+        setupUIStructure();
         
         // Import VFX dynamically if needed
         if (typeof window.VFX === 'undefined') {
@@ -237,6 +309,16 @@ window.addEventListener('load', async () => {
         vfx = new window.VFX();
         console.log("VFX initialized successfully");
         
+        // Track visualization changes to remember the last active one
+        document.querySelectorAll('.viz-button').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const vizName = btn.getAttribute('data-viz');
+                if (vizName !== 'vhsTape') {
+                    lastActiveHydraViz = vizName;
+                }
+            });
+        });
+        
         // Get the VHS Tape button from the existing controls
         const vhsTapeButton = Array.from(document.querySelectorAll('.viz-button'))
             .find(btn => btn.getAttribute('data-viz') === 'vhsTape');
@@ -244,35 +326,31 @@ window.addEventListener('load', async () => {
         if (vhsTapeButton) {
             console.log("Found VHS Tape button");
             
-            // Override the click handler
+            // Create clean event handler
+            const originalClickHandler = vhsTapeButton.onclick;
+            vhsTapeButton.onclick = null;
+            
+            // Add our click handler
             vhsTapeButton.addEventListener('click', (e) => {
                 console.log("VHS Tape button clicked");
                 
-                // Prevent default hydra visualization for vhsTape
-                e.preventDefault();
+                // Prevent interference with Hydra's default handler
                 e.stopPropagation();
                 
-                // Mark button as active manually
-                if (!activeEffect) {
-                    vhsTapeButton.classList.add('active');
-                }
-                
-                // Activate our VFX-JS effect
+                // Toggle VHS effect
                 activateVHSEffect(document.getElementById('hydra-canvas'));
-                
-                // Ensure UI stays visible
-                setTimeout(ensureUIVisibility, 100);
-            }, true);
+            });
         } else {
             console.log("VHS Tape button not found, creating our own");
             
             // Create a button to toggle the VHS effect
             const vhsButton = document.createElement('button');
             vhsButton.textContent = "Toggle VHS Effect";
+            vhsButton.className = 'viz-button vhs-ui-control';
+            vhsButton.setAttribute('data-viz', 'vhsTape');
             vhsButton.style.position = "fixed";
             vhsButton.style.top = "10px";
             vhsButton.style.right = "10px";
-            vhsButton.style.zIndex = "1000";
             vhsButton.style.padding = "10px";
             vhsButton.style.background = "#ff5555";
             vhsButton.style.color = "white";
@@ -289,14 +367,10 @@ window.addEventListener('load', async () => {
         
         // Try to hook into the existing audio analyzer
         window.updateVHSAudio = updateAudioIntensity;
-        
-        // Make sure we update UI visibility when clicking any button
-        document.querySelectorAll('.viz-button').forEach(btn => {
-            btn.addEventListener('click', () => {
-                setTimeout(ensureUIVisibility, 100);
-            });
-        });
     } catch (error) {
         console.error("Error in VHS effect initialization:", error);
     }
-}); 
+});
+
+// Ensure our UI structure is maintained on resize
+window.addEventListener('resize', setupUIStructure); 
