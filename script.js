@@ -6,6 +6,9 @@ const hydra = new Hydra({
     height: window.innerHeight
 });
 
+// Enable video as Hydra source
+s0.initVideo(document.getElementById('video-background'));
+
 // Force canvas to fill screen
 document.getElementById('hydra-canvas').style.width = '100vw';
 document.getElementById('hydra-canvas').style.height = '100vh';
@@ -23,6 +26,50 @@ let videoBackgroundActive = false;
 const videoBackground = document.getElementById('video-background');
 const sampleVideoUrl = 'https://storage.googleapis.com/coverr-main/mp4/Mt_Baker.mp4';
 const localVideoUrl = 'video-background.mp4';
+
+// Ensure proper video element styling
+videoBackground.style.position = 'fixed';
+videoBackground.style.top = '0';
+videoBackground.style.left = '0';
+videoBackground.style.width = '100%';
+videoBackground.style.height = '100%';
+videoBackground.style.objectFit = 'cover';
+videoBackground.style.zIndex = '-1'; // Behind canvas
+videoBackground.style.opacity = '0'; // Start hidden
+
+// Make the enforceVideoVisibility function globally available
+window.enforceVideoVisibility = function(forceVisible = null) {
+    // If forceVisible is passed, it overrides videoBackgroundActive
+    const shouldBeVisible = forceVisible !== null ? forceVisible : videoBackgroundActive;
+    
+    console.log("Global video visibility enforcement called, should be visible:", shouldBeVisible);
+    
+    if (shouldBeVisible) {
+        // Ensure video is visible and properly styled
+        videoBackground.style.display = 'block';
+        videoBackground.style.opacity = '1.0'; // Fully visible
+        videoBackground.style.zIndex = '-1';
+        
+        // If video is paused but should be playing, restart it
+        if (videoBackground.paused) {
+            videoBackground.play().catch(err => {
+                console.error("Error playing video during enforcement:", err);
+            });
+        }
+        
+        // When video is playing, canvas should be fully opaque but blend with video source
+        document.getElementById('hydra-canvas').style.opacity = '1.0';
+        
+        // Make sure Hydra is using the video as a source
+        src(s0).out(o3); // Store video in buffer o3 for visualizations to use
+    } else if (!shouldBeVisible && forceVisible !== true) {
+        // Only hide if not explicitly forced to be visible
+        videoBackground.style.opacity = '0';
+        
+        // Clear video buffer when video is disabled
+        solid(0, 0, 0, 0).out(o3);
+    }
+};
 
 // Check if a video is playable - returns a Promise
 function checkVideoPlayable(videoElement) {
@@ -91,6 +138,13 @@ async function setupAudio() {
 const visualizations = {
     // White chalk effect (current style)
     chalk: (level, isSilent, opacity) => {
+        // Sample video if active
+        if (videoBackgroundActive) {
+            src(s0).out(o3);
+        } else {
+            solid(0, 0, 0, 0).out(o3);
+        }
+        
         // Create a base of voronoi cells that completely fill the screen
         voronoi(100, 0.5, 0.3)
             .modulateScale(
@@ -143,41 +197,29 @@ const visualizations = {
             .saturate(0)
             .out(o2);
         
-        // Create a noise floor texture
-        noise(3, 0.1)
-            .thresh(0.5)
-            .mult(
-                noise(10, 0.1)
-                .thresh(0.3)
-            )
-            .scale(2.0) // Scale beyond screen to ensure coverage
-            .rotate(() => time * 0.01)
-            .scrollX(() => time * 0.005)
-            .scrollY(() => Math.sin(time * 0.01) * 0.05)
-            .brightness(-0.1)
-            .contrast(1.2)
-            .saturate(0)
-            .out(o3);
-        
-        // Combine all outputs with blend modes that ensure full screen coverage
+        // Final chalk composition with video blend
         src(o0)
             .layer(
                 src(o1)
-                .blend(src(o3), () => 0.2 + level * 0.3)
-            )
-            .layer(
-                src(o2)
-                .blend(src(o3), () => 0.3 + level * 0.2)
+                .blend(src(o2), () => 0.2 + level * 0.3)
             )
             .scale(1.5) // Scale beyond screen edges for full coverage
             .color(1, 1, 1) // Ensure white color (for chalk effect)
             .saturate(0) // Keep it black and white
-            .mult(solid(1, 1, 1, () => opacity)) // Control global opacity with silence detection
+            .mult(solid(1, 1, 1, () => opacity)) // Control global opacity
+            .blend(src(o3), videoBackgroundActive ? 0.3 : 0) // Blend with video if active
             .out();
     },
 
     // Neon glow effect
     neon: (level, isSilent, opacity) => {
+        // Sample video if active
+        if (videoBackgroundActive) {
+            src(s0).out(o3);
+        } else {
+            solid(0, 0, 0, 0).out(o3);
+        }
+        
         // Neon base
         osc(10, 0.1, 1.5)
             .color(0.5, 0.1, () => 0.2 + level * 3)
@@ -218,12 +260,13 @@ const visualizations = {
             .blend(o1, 0.8)
             .out(o1);
             
-        // Reactive glow
+        // Reactive glow with video blend
         src(o0)
             .layer(src(o1))
+            // Modulate with video if active for color effects
             .modulate(
-                noise(2, 0.1).scale(3),
-                0.01
+                src(o3).pixelate(50, 50).brightness(0.2).contrast(1.5),
+                videoBackgroundActive ? 0.1 : 0
             )
             .scale(1.01)
             .brightness(0.1)
@@ -233,7 +276,7 @@ const visualizations = {
             .mult(solid(1, 1, 1, () => opacity))
             .out(o2);
             
-        // Final render with neon glow
+        // Final render with neon glow and video blend
         src(o2)
             .layer(
                 src(o2)
@@ -241,6 +284,11 @@ const visualizations = {
                 .blur(0.5)
                 .mask(src(o1).thresh(0.5))
                 .blend(src(o0), 0.5)
+            )
+            // Blend with video source for final composition
+            .blend(
+                src(o3),
+                videoBackgroundActive ? () => 0.2 + level * 0.2 : 0
             )
             .out();
     },
@@ -960,6 +1008,18 @@ const visualizations = {
 
     // VHS Tape - simplified version
     vhsTape: (level, isSilent, opacity) => {
+        // Enforce video visibility if it should be active
+        if (videoBackgroundActive) {
+            window.enforceVideoVisibility(true);
+        }
+        
+        // If video is active, store it in o3 for blending
+        if (videoBackgroundActive) {
+            src(s0).out(o3);
+        } else {
+            solid(0, 0, 0, 0).out(o3);
+        }
+        
         // Simple base
         osc(10, 0.1, 1)
             .brightness(-0.5)
@@ -975,7 +1035,7 @@ const visualizations = {
             .mult(solid(1, 1, 1, () => 0.3 + level * 0.3))
             .out(o1);
         
-        // Final output
+        // Final output with video blend
         src(o0)
             .layer(src(o1))
             // Add noise grain
@@ -994,6 +1054,8 @@ const visualizations = {
                 .mult(solid(1, 1, 1, 0.15))
             )
             .mult(solid(1, 1, 1, () => opacity))
+            // Blend with video if active
+            .blend(src(o3), videoBackgroundActive ? 0.4 : 0)
             .out();
     },
 };
@@ -1006,16 +1068,6 @@ setupAudio().then((audioData) => {
     }
     
     const { analyser, dataArray, bufferLength } = audioData;
-    
-    // Set up source from video for use in visualizations
-    try {
-        s0.init({ src: videoBackground });
-        console.log("Video source initialized successfully");
-    } catch (err) {
-        console.error("Error initializing video source:", err);
-        // Create a fallback source if initialization fails
-        solid(0, 0, 0, 1).out(s0);
-    }
     
     // Constants for silence detection
     const SILENCE_THRESHOLD = 5; // Threshold below which we consider silence
@@ -1072,14 +1124,20 @@ setupAudio().then((audioData) => {
             window.updateVHSAudio(transitionLevel);
         }
         
+        // Ensure video is properly captured as a source
+        if (videoBackgroundActive) {
+            src(s0).out(o3);
+        }
+        
         try {
             // Get active visualizations as array
             const activeVizArray = Array.from(activeVisualizations);
             
-            // If we have only one active visualization, just run it directly
+            // If we have only one active visualization
             if (activeVizArray.length === 1) {
                 const vizName = activeVizArray[0];
                 if (visualizations[vizName]) {
+                    // Run the visualization
                     visualizations[vizName](transitionLevel, isSilent, currentOpacity);
                 }
                 return;
@@ -1087,7 +1145,7 @@ setupAudio().then((audioData) => {
             
             // For multiple visualizations, we need a simpler approach to avoid buffer conflicts
             
-            // Start with a clean slate for the first visualization
+            // Start with a clean slate
             solid(0, 0, 0, 1).out(o0);
             
             // Run visualizations one by one with simpler blending
@@ -1103,14 +1161,14 @@ setupAudio().then((audioData) => {
                 }
                 
                 // For subsequent visualizations, store current output
-                src(o0).out(o3);
+                src(o0).out(o2);
                 
                 // Clear main buffer and run next visualization
                 solid(0, 0, 0, 0).out(o0);
                 visualizations[vizName](transitionLevel, isSilent, currentOpacity * 0.7);
                 
                 // Blend with stored result using a simple add blend
-                src(o3).add(src(o0), 0.8).out(o0);
+                src(o2).add(src(o0), 0.8).out(o0);
             }
         } catch (error) {
             console.error("Error in visualization render:", error);
@@ -1125,6 +1183,65 @@ setupAudio().then((audioData) => {
 }).catch(err => {
     console.error("Error in audio visualization setup:", err);
 });
+
+// Video background toggle
+function updateVideoBackground(enabled) {
+    videoBackgroundActive = enabled;
+    
+    if (enabled) {
+        // Show video with proper styling
+        videoBackground.style.display = 'block';
+        videoBackground.style.opacity = '1.0'; // Fully visible
+        
+        // Make canvas fully visible - effects will blend with video
+        document.getElementById('hydra-canvas').style.opacity = '1.0';
+        
+        // Ensure video is playing
+        if (videoBackground.paused) {
+            videoBackground.play().catch(err => {
+                console.error('Error playing video:', err);
+                
+                // If there's an error with the local file, try switching to the sample video
+                const sampleVideoToggle = document.getElementById('use-sample-video');
+                if (sampleVideoToggle && !sampleVideoToggle.checked) {
+                    console.log('Attempting to use sample video instead...');
+                    sampleVideoToggle.checked = true;
+                    
+                    // Trigger the change event to update the video source
+                    const event = new Event('change');
+                    sampleVideoToggle.dispatchEvent(event);
+                }
+            });
+        }
+        
+        console.log("Video background enabled");
+    } else {
+        // Hide video
+        videoBackground.style.opacity = '0';
+        
+        // Optional: pause the video when hidden to save resources
+        videoBackground.pause();
+        
+        // Make canvas fully opaque
+        document.getElementById('hydra-canvas').style.opacity = '1';
+        
+        console.log("Video background disabled");
+    }
+    
+    // Make sure Hydra knows about the video state change
+    if (enabled) {
+        // Ensure video is correctly loaded as source
+        s0.initVideo(document.getElementById('video-background'));
+        src(s0).out(o3);
+    } else {
+        solid(0, 0, 0, 0).out(o3);
+    }
+    
+    // Notify any other components that care about video state
+    if (typeof window.videoStateChanged === 'function') {
+        window.videoStateChanged(enabled);
+    }
+}
 
 // Update visualization buttons based on active set
 function updateVisualizationUI() {
@@ -1205,6 +1322,47 @@ document.addEventListener('DOMContentLoaded', () => {
                     // Update UI
                     updateVisualizationUI();
                     
+                    // Force buffer reinitialize to ensure clean state
+                    // Clear all output buffers explicitly to avoid stale data
+                    solid(0, 0, 0, 0).out(o0);
+                    solid(0, 0, 0, 0).out(o1);
+                    solid(0, 0, 0, 0).out(o2);
+                    
+                    // Keep video in o3 if active
+                    if (videoBackgroundActive) {
+                        src(s0).out(o3);
+                    } else {
+                        solid(0, 0, 0, 0).out(o3);
+                    }
+                    
+                    // Special handling for VHS effect
+                    if (selectedViz === 'vhsTape') {
+                        // If we have the external VHS effect available, use it
+                        if (typeof window.activateVHSEffect === 'function') {
+                            // But only if it's not already active
+                            if (typeof window.isVHSActive === 'undefined' || !window.isVHSActive) {
+                                window.activateVHSEffect(document.getElementById('hydra-canvas'));
+                                console.log("Activated external VHS effect");
+                            }
+                        }
+                    } else {
+                        // If switching away from VHS and external effect is active, deactivate it
+                        if (typeof window.isVHSActive !== 'undefined' && window.isVHSActive) {
+                            if (typeof window.deactivateVHSEffect === 'function') {
+                                window.deactivateVHSEffect();
+                                console.log("Deactivated external VHS effect");
+                            }
+                        }
+                    }
+                    
+                    // Always ensure video visibility is maintained if it should be active
+                    // This needs to happen AFTER the VHS effect changes to avoid conflicts
+                    if (videoBackgroundActive) {
+                        setTimeout(() => {
+                            window.enforceVideoVisibility(true);
+                        }, 50);
+                    }
+                    
                     // Log active visualizations
                     console.log(`Currently active: ${Array.from(activeVisualizations).join(', ')}`);
                 } else {
@@ -1254,52 +1412,38 @@ document.addEventListener('DOMContentLoaded', () => {
         if (useSampleVideo) {
             // Set to sample video from the web
             videoBackground.querySelector('source').src = sampleVideoUrl;
+            console.log("Switching to sample video:", sampleVideoUrl);
         } else {
             // Set to local video file
             videoBackground.querySelector('source').src = localVideoUrl;
+            console.log("Switching to local video:", localVideoUrl);
         }
         
         // Reload the video to apply the new source
         videoBackground.load();
         
-        // If video is currently active, play the new source
+        // If video is currently active, play the new source after it loads
         if (videoBackgroundActive) {
-            videoBackground.play().catch(err => {
-                console.error('Error playing video after source change:', err);
-            });
+            videoBackground.addEventListener('loadeddata', () => {
+                console.log("Video loaded, playing now");
+                
+                // Show video properly
+                videoBackground.style.display = 'block';
+                videoBackground.style.opacity = '1.0';
+                
+                // Reinitialize video as source
+                s0.initVideo(document.getElementById('video-background'));
+                
+                // Play the video
+                videoBackground.play().catch(err => {
+                    console.error('Error playing video after source change:', err);
+                });
+            }, { once: true });
         }
     });
 
     videoToggle.addEventListener('change', () => {
-        videoBackgroundActive = videoToggle.checked;
-        
-        if (videoBackgroundActive) {
-            // Show and play video
-            videoBackground.style.opacity = '0.8';
-            videoBackground.play().catch(err => {
-                console.error('Error playing video:', err);
-                
-                // If there's an error with the local file, try switching to the sample video
-                if (!sampleVideoToggle.checked) {
-                    console.log('Attempting to use sample video instead...');
-                    sampleVideoToggle.checked = true;
-                    
-                    // Trigger the change event to update the video source
-                    const event = new Event('change');
-                    sampleVideoToggle.dispatchEvent(event);
-                }
-            });
-            
-            // Make hydra canvas semi-transparent to let video show through
-            document.getElementById('hydra-canvas').style.opacity = '0.8';
-        } else {
-            // Hide video
-            videoBackground.style.opacity = '0';
-            videoBackground.pause();
-            
-            // Make hydra canvas fully opaque
-            document.getElementById('hydra-canvas').style.opacity = '1';
-        }
+        updateVideoBackground(videoToggle.checked);
     });
 });
 
@@ -1308,4 +1452,27 @@ window.addEventListener('resize', () => {
     hydra.setResolution(window.innerWidth, window.innerHeight);
     document.getElementById('hydra-canvas').style.width = '100vw';
     document.getElementById('hydra-canvas').style.height = '100vh';
-}); 
+});
+
+// Make a global function to reset visualization state if needed
+window.resetViz = function() {
+    console.log("Resetting visualization state");
+    
+    // Force buffer reinitialize to ensure clean state
+    solid(0, 0, 0, 0).out(o0);
+    solid(0, 0, 0, 0).out(o1);
+    solid(0, 0, 0, 0).out(o2);
+    solid(0, 0, 0, 0).out(o3);
+    
+    // If there was a previously active visualization, reactivate it
+    if (currentViz && currentViz !== 'vhsTape') {
+        // Find the button for the current viz
+        const vizButton = document.querySelector(`.viz-button[data-viz="${currentViz}"]`);
+        if (vizButton) {
+            // Update UI
+            activeVisualizations.clear();
+            activeVisualizations.add(currentViz);
+            updateVisualizationUI();
+        }
+    }
+}; 

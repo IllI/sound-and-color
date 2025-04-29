@@ -94,7 +94,25 @@ let trackingIntensity = 0;
 let vfx = null;
 let activeEffect = null;
 let isVHSActive = false;
-let lastActiveHydraViz = 'chalk'; // Store last active visualization
+let lastActiveHydraViz = 'chalk';
+let uiContainer = null;
+let originalUI = null;
+let videoBackgroundState = null;
+let videoObserver = null;
+let isVideoEnabled = false;
+
+// Expose VHS state to window/global scope
+window.isVHSActive = false;
+
+// Global variables to track state
+let savedVideoBackgroundState = {
+    wasActive: false,
+    opacity: 1.0,
+    zIndex: 1
+};
+let savedUIState = {
+    controlsHidden: false
+};
 
 // Function to update audio intensity from the existing audio analyzer
 function updateAudioIntensity(level) {
@@ -111,161 +129,404 @@ function updateAudioIntensity(level) {
     trackingIntensity = trackingIntensity * 0.85 + targetIntensity * 0.15; // Smoother transition
     
     // Debug info
-    console.log("VHS Audio level:", audioLevel.toFixed(2));
+    // console.log("VHS Audio level:", audioLevel.toFixed(2));
 }
 
-// Setup a proper class-based approach that doesn't use !important
-function setupUIStructure() {
-    // Add a CSS class that doesn't override existing styles but adds proper layering
-    const styleId = 'vhs-effect-styles';
-    if (!document.getElementById(styleId)) {
-        const style = document.createElement('style');
-        style.id = styleId;
-        style.textContent = `
-            /* Layering classes */
-            .vhs-ui-layer { 
-                position: relative;
-                z-index: 50;
-            }
-            
-            /* Optional - only applied when VHS is active */
-            .vhs-active .hydra-canvas-container {
-                z-index: 1;
-            }
-            
-            .vhs-active .vhs-ui-layer {
-                z-index: 50;
-            }
-            
-            /* Ensure UI is always interactable */
-            .vhs-ui-control {
-                position: relative;
-                z-index: 5;
-            }
-        `;
-        document.head.appendChild(style);
+// Enforce video visibility - ensures video remains visible when it should be
+function enforceVideoVisibility(forceVisible = true) {
+    // Check if the global enforcer exists first
+    if (typeof window.enforceVideoVisibility === 'function') {
+        console.log("Using global video enforcer");
+        window.enforceVideoVisibility(forceVisible);
+        return;
     }
     
-    // Structure the DOM properly rather than forcing z-index
+    // Otherwise use our local implementation
+    const videoBackground = document.getElementById('video-background');
+    if (!videoBackground) return;
+    
+    if (forceVisible) {
+        // Check if there's a global video state we should respect
+        if (typeof window.videoBackgroundActive !== 'undefined') {
+            isVideoEnabled = window.videoBackgroundActive;
+            
+            if (!isVideoEnabled && !isVHSActive) {
+                console.log("Video is globally disabled and VHS not active, not enforcing");
+                return;
+            }
+        }
+        
+        if (videoBackground.style.display === 'none') {
+            console.log("Video was hidden, making visible for VHS effect");
+            videoBackground.style.display = 'block';
+        }
+        
+        if (parseFloat(videoBackground.style.opacity) < 0.7) {
+            videoBackground.style.opacity = '0.9';
+        }
+        
+        // Ensure video is playing
+        if (videoBackground.paused) {
+            try {
+                const playPromise = videoBackground.play();
+                if (playPromise !== undefined) {
+                    playPromise.catch(error => {
+                        console.warn("Could not autoplay video:", error);
+                    });
+                }
+            } catch (e) {
+                console.warn("Error playing video:", e);
+            }
+        }
+        
+        // Make canvas semi-transparent
+        const hydraCanvas = document.getElementById('hydra-canvas');
+        if (hydraCanvas && parseFloat(hydraCanvas.style.opacity) > 0.9) {
+            hydraCanvas.style.opacity = '0.8';
+        }
+    }
+}
+
+// Start monitoring video status across visualization changes
+function startVideoObserver() {
+    if (window.videoObserverInterval) {
+        clearInterval(window.videoObserverInterval);
+    }
+    
+    // Check immediately
+    enforceVideoVisibility(true);
+    
+    // Then set up observer to keep checking
+    window.videoObserverInterval = setInterval(() => {
+        if (isVHSActive || isVideoEnabled) {
+            enforceVideoVisibility(true);
+        } else {
+            clearInterval(window.videoObserverInterval);
+            window.videoObserverInterval = null;
+        }
+    }, 1000); // Check every second
+    
+    console.log("Video observer started");
+}
+
+// Stop monitoring video status
+function stopVideoObserver() {
+    if (window.videoObserverInterval) {
+        clearInterval(window.videoObserverInterval);
+        window.videoObserverInterval = null;
+        console.log("Stopped video observer");
+    }
+}
+
+// Function to save the current state of the video background
+function saveVideoBackgroundState() {
+    const videoBackground = document.getElementById('video-background');
+    if (videoBackground) {
+        savedVideoBackgroundState.wasActive = videoBackground.style.display !== 'none';
+        savedVideoBackgroundState.opacity = parseFloat(videoBackground.style.opacity) || 1.0;
+        savedVideoBackgroundState.zIndex = parseInt(videoBackground.style.zIndex) || 1;
+        console.log("Saved video background state:", savedVideoBackgroundState);
+    }
+    
+    // Save the state of the video toggle
+    const videoToggle = document.getElementById('video-toggle');
+    if (videoToggle) {
+        savedVideoBackgroundState.toggleChecked = videoToggle.checked;
+    }
+}
+
+// Function to restore the video background to its saved state
+function restoreVideoBackgroundState() {
+    // If video is globally enabled, don't restore to a disabled state
+    if (typeof window.videoBackgroundActive !== 'undefined' && window.videoBackgroundActive) {
+        console.log("Video is globally enabled, not restoring to previous state");
+        window.enforceVideoVisibility(true);
+        return;
+    }
+    
+    const videoBackground = document.getElementById('video-background');
+    if (videoBackground) {
+        if (!savedVideoBackgroundState.wasActive) {
+            videoBackground.style.opacity = '0';
+        } else {
+            videoBackground.style.display = 'block';
+            videoBackground.style.opacity = savedVideoBackgroundState.opacity;
+            videoBackground.style.zIndex = savedVideoBackgroundState.zIndex;
+        }
+        console.log("Restored video background state:", savedVideoBackgroundState);
+    }
+    
+    // Only restore the toggle if video is not globally enabled
+    if (typeof window.videoBackgroundActive === 'undefined' || !window.videoBackgroundActive) {
+        const videoToggle = document.getElementById('video-toggle');
+        if (videoToggle && videoToggle.checked !== savedVideoBackgroundState.toggleChecked) {
+            videoToggle.checked = savedVideoBackgroundState.toggleChecked;
+            
+            // Trigger change event to ensure any listeners are notified
+            const event = new Event('change');
+            videoToggle.dispatchEvent(event);
+        }
+    }
+}
+
+// Function to save UI state
+function saveUI() {
+    const controlPanel = document.querySelector('.control-panel');
+    if (controlPanel) {
+        savedUIState.controlsHidden = controlPanel.classList.contains('hidden');
+    }
+    console.log("Saved UI state:", savedUIState);
+}
+
+// Function to restore UI to normal
+function restoreUI() {
+    const controlPanel = document.querySelector('.control-panel');
+    if (controlPanel) {
+        if (savedUIState.controlsHidden) {
+            controlPanel.classList.add('hidden');
+        } else {
+            controlPanel.classList.remove('hidden');
+        }
+    }
+    console.log("Restored UI state:", savedUIState);
+}
+
+// Create a fixed UI container that will always stay on top
+function createFixedUIContainer() {
+    if (uiContainer) {
+        // Already created
+        return uiContainer;
+    }
+    
+    // Create container
+    uiContainer = document.createElement('div');
+    uiContainer.id = 'vhs-ui-container';
+    uiContainer.style.position = 'fixed';
+    uiContainer.style.bottom = '20px';
+    uiContainer.style.right = '20px';
+    uiContainer.style.zIndex = '9999';
+    uiContainer.style.pointerEvents = 'all';
+    
+    document.body.appendChild(uiContainer);
+    
+    return uiContainer;
+}
+
+// Move UI to safe container during VHS effect
+function preserveUI() {
+    // Only do this once
+    if (originalUI) {
+        return;
+    }
+    
+    // Create container if needed
+    const container = createFixedUIContainer();
+    
+    // Get original UI elements
     const controlPanel = document.getElementById('control-panel');
     const togglePanel = document.getElementById('toggle-panel');
     
-    // Add classes instead of inline styles
-    if (controlPanel && !controlPanel.classList.contains('vhs-ui-layer')) {
-        controlPanel.classList.add('vhs-ui-layer');
-    }
-    
-    if (togglePanel && !togglePanel.classList.contains('vhs-ui-layer')) {
-        togglePanel.classList.add('vhs-ui-layer');
-    }
-    
-    // Add class to buttons instead of forcing inline styles
-    document.querySelectorAll('.viz-button').forEach(btn => {
-        if (!btn.classList.contains('vhs-ui-control')) {
-            btn.classList.add('vhs-ui-control');
-        }
-    });
-    
-    // Wrap hydra canvas in a container if needed
-    const hydraCanvas = document.getElementById('hydra-canvas');
-    if (hydraCanvas && !hydraCanvas.parentElement.classList.contains('hydra-canvas-container')) {
-        // Only if it's not already wrapped
-        const wrapper = document.createElement('div');
-        wrapper.className = 'hydra-canvas-container';
-        wrapper.style.position = 'fixed';
-        wrapper.style.top = '0';
-        wrapper.style.left = '0';
-        wrapper.style.width = '100%';
-        wrapper.style.height = '100%';
+    if (controlPanel) {
+        // Save reference to original location
+        originalUI = {
+            controlPanel: controlPanel,
+            controlParent: controlPanel.parentNode,
+            controlNext: controlPanel.nextSibling,
+            togglePanel: togglePanel,
+            toggleParent: togglePanel ? togglePanel.parentNode : null,
+            toggleNext: togglePanel ? togglePanel.nextSibling : null
+        };
         
-        // Move the canvas into the wrapper
-        const parent = hydraCanvas.parentElement;
-        parent.insertBefore(wrapper, hydraCanvas);
-        wrapper.appendChild(hydraCanvas);
+        // Move to our safe container
+        container.appendChild(controlPanel);
+        
+        // Ensure proper styling
+        controlPanel.style.position = 'static';
+        controlPanel.style.transform = 'none';
+        controlPanel.classList.remove('hidden');
+        
+        if (togglePanel) {
+            // Also move toggle panel if it exists
+            const computedStyle = window.getComputedStyle(togglePanel);
+            const originalRight = computedStyle.right;
+            const originalBottom = computedStyle.bottom;
+            
+            container.appendChild(togglePanel);
+            
+            // Adjust position to match original
+            togglePanel.style.position = 'absolute';
+            togglePanel.style.right = originalRight;
+            togglePanel.style.bottom = originalBottom;
+        }
+    }
+    
+    // Preserve video background toggle functionality
+    const videoToggle = document.getElementById('video-toggle');
+    if (videoToggle) {
+        videoToggle.addEventListener('change', handleVideoToggle);
+    }
+    
+    const sampleVideoToggle = document.getElementById('use-sample-video');
+    if (sampleVideoToggle) {
+        sampleVideoToggle.addEventListener('change', handleSampleVideoToggle);
     }
 }
 
-// Function to manually update visualization buttons state
-function updateVisualizationUI() {
-    document.querySelectorAll('.viz-button').forEach(btn => {
-        const vizName = btn.getAttribute('data-viz');
-        if (isVHSActive && vizName === 'vhsTape') {
-            btn.classList.add('active');
-        } else if (isVHSActive && vizName !== 'vhsTape') {
-            btn.classList.remove('active');
-        } else if (!isVHSActive && vizName === lastActiveHydraViz) {
-            btn.classList.add('active');
+// Handler for video toggle
+function handleVideoToggle(e) {
+    const videoToggle = e.target;
+    const videoBackgroundActive = videoToggle.checked;
+    
+    // Update both local and global tracking of video state
+    isVideoEnabled = videoBackgroundActive;
+    
+    // If we have access to the global video state, sync with it
+    if (typeof window.videoBackgroundActive !== 'undefined') {
+        window.videoBackgroundActive = videoBackgroundActive;
+    }
+    
+    if (videoBackgroundActive) {
+        // Call the global enforcer if available
+        if (typeof window.enforceVideoVisibility === 'function') {
+            window.enforceVideoVisibility(true);
+        } else {
+            // Otherwise use our local implementation
+            enforceVideoVisibility(true);
         }
-    });
+        
+        // Ensure video observer is running
+        startVideoObserver();
+    } else if (!isVHSActive) {
+        // Only hide video if VHS effect is not active
+        const videoBackground = document.getElementById('video-background');
+        if (videoBackground) {
+            videoBackground.style.opacity = '0';
+            videoBackground.pause();
+        }
+        
+        // Make hydra canvas fully opaque
+        const hydraCanvas = document.getElementById('hydra-canvas');
+        if (hydraCanvas) {
+            hydraCanvas.style.opacity = '1';
+        }
+        
+        // Stop video observer since video is now disabled
+        stopVideoObserver();
+    }
+    
+    // Update our saved state
+    if (videoBackgroundState) {
+        videoBackgroundState.wasVisible = videoBackgroundActive;
+        videoBackgroundState.wasPlaying = videoBackgroundActive;
+        videoBackgroundState.videoToggleState = videoBackgroundActive;
+    }
+    
+    // Notify any global handlers
+    if (typeof window.videoStateChanged === 'function') {
+        window.videoStateChanged(videoBackgroundActive);
+    }
 }
 
-// Return to the previous visualization when VHS is deactivated
-function restorePreviousVisualization() {
-    // Find button for the last active visualization
-    const prevVizButton = document.querySelector(`.viz-button[data-viz="${lastActiveHydraViz}"]`);
-    if (prevVizButton) {
-        // Simulate a click on the previous visualization button
-        prevVizButton.click();
+// Handler for sample video toggle
+function handleSampleVideoToggle(e) {
+    const sampleVideoToggle = e.target;
+    const useSampleVideo = sampleVideoToggle.checked;
+    const videoBackground = document.getElementById('video-background');
+    
+    if (!videoBackground) return;
+    
+    // Update video source
+    if (useSampleVideo) {
+        // Set to sample video from the web
+        const source = videoBackground.querySelector('source');
+        if (source) {
+            source.src = 'https://storage.googleapis.com/coverr-main/mp4/Mt_Baker.mp4';
+        }
+    } else {
+        // Set to local video file
+        const source = videoBackground.querySelector('source');
+        if (source) {
+            source.src = 'video-background.mp4';
+        }
+    }
+    
+    // Reload the video to apply the new source
+    videoBackground.load();
+    
+    // If video is currently active, play the new source
+    const videoToggle = document.getElementById('video-toggle');
+    const isVideoActive = videoToggle && videoToggle.checked;
+    
+    if (isVideoActive || isVHSActive) {
+        videoBackground.play().catch(err => {
+            console.error('Error playing video after source change:', err);
+        });
+    }
+    
+    // Update our saved state
+    if (videoBackgroundState) {
+        videoBackgroundState.sampleVideoState = useSampleVideo;
+        videoBackgroundState.source = useSampleVideo ? 
+            'https://storage.googleapis.com/coverr-main/mp4/Mt_Baker.mp4' : 
+            'video-background.mp4';
     }
 }
 
 // Function to activate the VHS effect
 function activateVHSEffect(target) {
-    // Setup proper UI structure first
-    setupUIStructure();
-    
-    // If already active, remove it
-    if (activeEffect) {
-        try {
-            document.body.classList.remove('vhs-active');
-            isVHSActive = false;
-            
-            vfx.remove(activeEffect);
-            activeEffect = null;
-            console.log("VHS effect removed");
-            
-            // Find and update the VHS button
-            const vhsButton = document.querySelector('.viz-button[data-viz="vhsTape"]');
-            if (vhsButton) {
-                vhsButton.classList.remove('active');
-            }
-            
-            // Restore previous visualization
-            restorePreviousVisualization();
-            
-            return;
-        } catch (error) {
-            console.error("Error removing VHS effect:", error);
-        }
-        return;
-    }
-    
-    if (!vfx) {
-        console.error("VFX not initialized");
-        return;
-    }
-    
-    // Remember the current active visualization (that's not VHS)
-    document.querySelectorAll('.viz-button.active').forEach(btn => {
-        const vizName = btn.getAttribute('data-viz');
-        if (vizName !== 'vhsTape') {
-            lastActiveHydraViz = vizName;
-            console.log(`Saved last active visualization: ${lastActiveHydraViz}`);
-        }
-    });
-    
-    // Mark document as having VHS active
-    document.body.classList.add('vhs-active');
-    isVHSActive = true;
-    
-    // Get the canvas or a fallback target
-    const hydraCanvas = document.getElementById('hydra-canvas');
-    const effectTarget = hydraCanvas || target || document.body;
-    
-    console.log("Activating VHS effect on", effectTarget);
-    
-    // Add the effect with our custom shader
+    console.log("Activating VHS tape effect");
     try {
+        // Force video to be visible for VHS effect
+        isVideoEnabled = true;
+        
+        // Track VHS state globally
+        isVHSActive = true;
+        window.isVHSActive = true;
+        
+        // Check if there's a global video enabled flag
+        if (typeof window.videoBackgroundActive !== 'undefined') {
+            window.videoBackgroundActive = true;
+        }
+        
+        // Use global video enforcement if available
+        if (typeof window.enforceVideoVisibility === 'function') {
+            window.enforceVideoVisibility(true);
+        } else {
+            // Otherwise use local implementation
+            enforceVideoVisibility(true);
+        }
+        
+        // Update video toggle to reflect that video is enabled
+        const videoToggle = document.getElementById('video-toggle');
+        if (videoToggle && !videoToggle.checked) {
+            videoToggle.checked = true;
+            // Trigger any handlers that might be listening for changes
+            const event = new Event('change');
+            videoToggle.dispatchEvent(event);
+        }
+        
+        // Remember current active visualization
+        document.querySelectorAll('.viz-button.active').forEach(btn => {
+            const vizName = btn.getAttribute('data-viz');
+            if (vizName !== 'vhsTape') {
+                lastActiveHydraViz = vizName;
+                console.log(`Saved last active visualization: ${lastActiveHydraViz}`);
+            }
+        });
+        
+        // Save video background state
+        saveVideoBackgroundState();
+        
+        // Move UI to safe container
+        preserveUI();
+        
+        // Get hydra canvas
+        const hydraCanvas = document.getElementById('hydra-canvas');
+        const effectTarget = hydraCanvas || target || document.body;
+        
+        console.log("Activating VHS effect on", effectTarget);
+        
+        // Add the effect with our custom shader
         activeEffect = vfx.add(effectTarget, {
             shader: vhsShader,
             uniforms: {
@@ -278,9 +539,73 @@ function activateVHSEffect(target) {
         });
         
         console.log("VHS effect activated successfully");
-        updateVisualizationUI();
+        
+        // Start video observer to ensure it stays visible
+        startVideoObserver();
+        
+        // Make VHS button active
+        const vhsButton = document.querySelector('.viz-button[data-viz="vhsTape"]');
+        if (vhsButton) {
+            vhsButton.classList.add('active');
+        }
     } catch (error) {
         console.error("Failed to activate VHS effect:", error);
+    }
+}
+
+// Function to deactivate the VHS effect and restore previous state
+function deactivateVHSEffect() {
+    console.log("Deactivating VHS effect...");
+    
+    try {
+        // Stop the video observer interval if it's running
+        if (window.videoObserverInterval) {
+            clearInterval(window.videoObserverInterval);
+            window.videoObserverInterval = null;
+            console.log("Stopped video observer interval");
+        }
+        
+        // Destroy the active effect
+        if (activeEffect) {
+            activeEffect.destroy();
+            activeEffect = null;
+            console.log("Destroyed active VHS effect");
+        }
+        
+        // Set VHS as inactive both locally and globally
+        isVHSActive = false;
+        window.isVHSActive = false;
+        
+        // Restore the video background to its previous state
+        // But only if video wasn't explicitly toggled on during VHS mode
+        const videoToggle = document.getElementById('video-toggle');
+        const videoCurrentlyWanted = videoToggle && videoToggle.checked;
+        
+        if (videoCurrentlyWanted) {
+            // Keep video on because the toggle indicates it should be
+            if (typeof window.enforceVideoVisibility === 'function') {
+                window.enforceVideoVisibility(true);
+            } else {
+                enforceVideoVisibility(true);
+            }
+        } else {
+            // Otherwise restore to previous state
+            restoreVideoBackgroundState();
+        }
+        
+        // Restore the UI
+        restoreUI();
+        
+        // Make the VHS button inactive
+        const vhsButton = document.querySelector('.viz-button[data-viz="vhsTape"]');
+        if (vhsButton) {
+            vhsButton.classList.remove('active');
+            console.log("VHS button set to inactive");
+        }
+        
+        console.log("VHS effect successfully deactivated");
+    } catch (error) {
+        console.error("Error deactivating VHS effect:", error);
     }
 }
 
@@ -288,9 +613,6 @@ function activateVHSEffect(target) {
 window.addEventListener('load', async () => {
     try {
         console.log("Window loaded, initializing VFX");
-        
-        // Setup UI structure before anything else
-        setupUIStructure();
         
         // Import VFX dynamically if needed
         if (typeof window.VFX === 'undefined') {
@@ -309,68 +631,99 @@ window.addEventListener('load', async () => {
         vfx = new window.VFX();
         console.log("VFX initialized successfully");
         
-        // Track visualization changes to remember the last active one
-        document.querySelectorAll('.viz-button').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const vizName = btn.getAttribute('data-viz');
-                if (vizName !== 'vhsTape') {
-                    lastActiveHydraViz = vizName;
-                }
-            });
+        // Create a mutation observer to watch for DOM changes that might affect video visibility
+        const bodyObserver = new MutationObserver((mutations) => {
+            // If video is enabled, ensure it stays visible
+            if (isVideoEnabled || 
+                (typeof window.videoBackgroundActive !== 'undefined' && window.videoBackgroundActive)) {
+                enforceVideoVisibility();
+            }
         });
         
-        // Get the VHS Tape button from the existing controls
-        const vhsTapeButton = Array.from(document.querySelectorAll('.viz-button'))
-            .find(btn => btn.getAttribute('data-viz') === 'vhsTape');
+        // Start observing the body for DOM changes
+        bodyObserver.observe(document.body, { 
+            childList: true, 
+            subtree: true, 
+            attributes: true,
+            attributeFilter: ['style', 'class']
+        });
         
-        if (vhsTapeButton) {
-            console.log("Found VHS Tape button");
+        // Add global binding to toggle VHS effect
+        window.activateVHSEffect = activateVHSEffect;
+        window.deactivateVHSEffect = deactivateVHSEffect;
+        
+        // Fix visualization buttons that might have original click behavior
+        // This allows the visualization buttons to work properly when video is active
+        document.querySelectorAll('.viz-button').forEach(btn => {
+            // Store the data-viz attribute
+            const vizName = btn.getAttribute('data-viz');
             
-            // Create clean event handler
-            const originalClickHandler = vhsTapeButton.onclick;
-            vhsTapeButton.onclick = null;
+            // Skip the VHS button, it has special handling
+            if (vizName === 'vhsTape') {
+                // Handle VHS button click special case
+                btn.addEventListener('click', (e) => {
+                    if (!isVHSActive) {
+                        activateVHSEffect(document.getElementById('hydra-canvas'));
+                    } else {
+                        deactivateVHSEffect();
+                        
+                        // Reset any visualization state if needed
+                        if (typeof window.resetViz === 'function') {
+                            window.resetViz();
+                        }
+                    }
+                    
+                    // Don't prevent default - let normal viz activation happen too
+                }, false);
+            }
+        });
+        
+        // Listen for global changes to video state
+        if (typeof window.videoStateChanged === 'function') {
+            const originalHandler = window.videoStateChanged;
             
-            // Add our click handler
-            vhsTapeButton.addEventListener('click', (e) => {
-                console.log("VHS Tape button clicked");
+            window.videoStateChanged = function(isActive) {
+                // Call original handler
+                originalHandler(isActive);
                 
-                // Prevent interference with Hydra's default handler
-                e.stopPropagation();
+                // Update our local state
+                isVideoEnabled = isActive;
                 
-                // Toggle VHS effect
-                activateVHSEffect(document.getElementById('hydra-canvas'));
-            });
-        } else {
-            console.log("VHS Tape button not found, creating our own");
-            
-            // Create a button to toggle the VHS effect
-            const vhsButton = document.createElement('button');
-            vhsButton.textContent = "Toggle VHS Effect";
-            vhsButton.className = 'viz-button vhs-ui-control';
-            vhsButton.setAttribute('data-viz', 'vhsTape');
-            vhsButton.style.position = "fixed";
-            vhsButton.style.top = "10px";
-            vhsButton.style.right = "10px";
-            vhsButton.style.padding = "10px";
-            vhsButton.style.background = "#ff5555";
-            vhsButton.style.color = "white";
-            vhsButton.style.border = "none";
-            vhsButton.style.borderRadius = "5px";
-            vhsButton.style.cursor = "pointer";
-            
-            vhsButton.addEventListener('click', () => {
-                activateVHSEffect(document.getElementById('hydra-canvas'));
-            });
-            
-            document.body.appendChild(vhsButton);
+                // Ensure video visibility if needed
+                if (isActive || isVHSActive) {
+                    // Use global enforcer if available
+                    if (typeof window.enforceVideoVisibility === 'function') {
+                        window.enforceVideoVisibility(true);
+                    } else {
+                        enforceVideoVisibility(true);
+                    }
+                    
+                    // Start observer if not already running
+                    if (!window.videoObserverInterval) {
+                        startVideoObserver();
+                    }
+                }
+            };
         }
         
         // Try to hook into the existing audio analyzer
         window.updateVHSAudio = updateAudioIntensity;
+        
+        // Listen for video toggle changes globally to track state
+        const videoToggle = document.getElementById('video-toggle');
+        if (videoToggle) {
+            isVideoEnabled = videoToggle.checked;
+            
+            // Start video observer if video is enabled
+            if (isVideoEnabled) {
+                startVideoObserver();
+                enforceVideoVisibility(true);
+            }
+        }
     } catch (error) {
         console.error("Error in VHS effect initialization:", error);
     }
-});
+}); 
 
-// Ensure our UI structure is maintained on resize
-window.addEventListener('resize', setupUIStructure); 
+// Make updateAudioIntensity globally available 
+window.updateVHSAudio = updateAudioIntensity; 
