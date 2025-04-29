@@ -6,8 +6,8 @@ const hydra = new Hydra({
     height: window.innerHeight
 });
 
-// Enable video as Hydra source
-s0.initVideo(document.getElementById('video-background'));
+// Enable video as Hydra source (correctly)
+s0.init({src: document.getElementById('video-background'), dynamic: true});
 
 // Force canvas to fill screen
 document.getElementById('hydra-canvas').style.width = '100vw';
@@ -1006,56 +1006,131 @@ const visualizations = {
             .out();
     },
 
-    // VHS Tape - simplified version
+    // VHS Tape - enhanced version
     vhsTape: (level, isSilent, opacity) => {
-        // Enforce video visibility if it should be active
-        if (videoBackgroundActive) {
-            window.enforceVideoVisibility(true);
+        // Always force the video to be visible when in VHS mode
+        const videoBackground = document.getElementById('video-background');
+        if (videoBackground) {
+            videoBackground.style.display = 'block';
+            videoBackground.style.opacity = '1.0';
+            videoBackground.style.zIndex = '0'; // Make sure it's below our effects
+            
+            if (videoBackground.paused) {
+                videoBackground.play().catch(err => console.warn("Error playing video:", err));
+            }
+            
+            // Set the global flag if it exists
+            if (typeof window.videoBackgroundActive !== 'undefined') {
+                window.videoBackgroundActive = true;
+            }
+            videoBackgroundActive = true;
         }
         
-        // If video is active, store it in o3 for blending
-        if (videoBackgroundActive) {
-            src(s0).out(o3);
-        } else {
-            solid(0, 0, 0, 0).out(o3);
+        // Make sure VHS effect is activated if available
+        if (typeof window.activateVHSEffect === 'function' && 
+            (typeof window.isVHSActive === 'undefined' || !window.isVHSActive)) {
+            console.log("Activating external VHS effect from Hydra visualization");
+            window.activateVHSEffect(document.getElementById('hydra-canvas'));
+            
+            // Continue with our own visualization as backup
+            console.log("Continuing with Hydra VHS visualization as backup");
         }
         
-        // Simple base
-        osc(10, 0.1, 1)
-            .brightness(-0.5)
-            .color(1.05, 0.95, 1.1)
+        // Capture video source to process and blend
+        src(s0).out(o3);
+        
+        // Create a heavily glitched video base
+        src(s0)
+            .pixelate(64, 64) // More extreme pixelation
+            .modulate(
+                noise(3).add(osc(7, 0).thresh(0.5)), 
+                0.03 + (level * 0.02) // More distortion that reacts to audio
+            )
+            .scrollX(() => Math.sin(time * 0.2) * 0.01)
+            .color(1.3, 0.85, 1.15) // More extreme color shift
+            .contrast(1.2) // Higher contrast
+            .brightness(0.05) // Darker for more dramatic look
             .out(o0);
         
-        // Simple tracking lines
-        osc(200, 0)
-            .thresh(0.5)
+        // Strong horizontal tracking lines that react to audio
+        osc(300, 0) // Higher frequency lines
+            .thresh(0.7) // Thicker lines
             .color(1, 1, 1)
-            .scrollY(() => time * 0.1)
-            .scale(1, () => 1 + level * 2)
-            .mult(solid(1, 1, 1, () => 0.3 + level * 0.3))
+            .scrollY(() => time * (0.1 + level * 0.3)) // Speed varies with audio
+            .scale(1, () => 1 + level * 5) // Much stronger audio reaction
+            .mult(solid(1, 1, 1, () => 0.5 + level * 0.5)) // Even higher opacity
             .out(o1);
         
-        // Final output with video blend
+        // VHS static/noise layer - more visible and reactive
+        noise(40)
+            .thresh(() => 0.94 - (level * 0.1)) // Threshold changes with audio
+            .mult(solid(1, 1, 1, () => 0.1 + level * 0.1)) // Noise opacity increases with audio
+            .out(o2);
+        
+        // Final output with enhanced VHS effects
         src(o0)
-            .layer(src(o1))
-            // Add noise grain
-            .add(noise(30).thresh(0.96).mult(solid(1, 1, 1, 0.05)))
-            // Color jitter
+            .layer(src(o1)) // Add tracking lines
+            .add(src(o2)) // Add noise grain
+            
+            // More dramatic color jitter tied to audio
             .color(
-                () => 1 + Math.sin(time * 10) * 0.02 * level,
-                () => 1 + Math.cos(time * 10) * 0.02 * level,
-                () => 1 + Math.sin(time * 8) * 0.02 * level
+                () => 1 + Math.sin(time * 10) * 0.06 * level,
+                () => 1 + Math.cos(time * 10) * 0.04 * level,
+                () => 1 + Math.sin(time * 8) * 0.08 * level
             )
-            // VHS static at bottom
+            
+            // Head switching noise at bottom - larger and more visible
             .layer(
-                noise(10).thresh(0.2)
-                .scale(1, 0.05)
-                .scrollY(-0.5)
-                .mult(solid(1, 1, 1, 0.15))
+                noise(10).thresh(0.08)
+                .scale(1, 0.12) // Thicker bar
+                .scrollY(-0.44)
+                .mult(solid(1, 1, 1, () => 0.4 + level * 0.2)) // Reacts to audio
             )
+            
+            // More pronounced tracking jitter tied to audio
+            .scrollX(() => Math.sin(time * 5 + Math.random()) * 0.008 * (level + 0.2))
+            
+            // More frequent vertical glitches tied to audio
+            .scrollY(() => Math.random() > (0.95 - level * 0.2) ? Math.random() * 0.04 - 0.02 : 0)
+            
+            // Enhanced RGB shift effect - more visible
+            .layer(
+                src(o0)
+                .scrollX(() => 0.003 + level * 0.002) // Audio reactive
+                .scrollY(0.001)
+                .color(1.4, 0, 0) // Stronger red
+                .mult(solid(1, 1, 1, () => 0.25 + level * 0.1)) // Audio reactive opacity
+            )
+            .layer(
+                src(o0)
+                .scrollX(() => -0.003 - level * 0.002) // Audio reactive in opposite direction
+                .scrollY(-0.001)
+                .color(0, 0, 1.4) // Stronger blue
+                .mult(solid(1, 1, 1, () => 0.15 + level * 0.1)) // Audio reactive opacity
+            )
+            
+            // More visible scan lines
+            .layer(
+                osc(800, 0, 0) // Higher frequency scan lines
+                .thresh(0.85)
+                .color(1, 1, 1)
+                .mult(solid(1, 1, 1, () => 0.15 + level * 0.05)) // Audio reactive
+            )
+            
+            // Random horizontal glitches that happen occasionally
+            .layer(
+                shape(4, 0.9, 0)
+                .scale(2, 0.03)
+                .scrollY(() => Math.random() > 0.97 ? Math.random() * 2 - 1 : -2) // Off screen unless glitching
+                .color(2, 2, 2) // Bright white
+                .mult(solid(1, 1, 1, () => Math.random() > 0.97 ? 0.8 : 0)) // Randomly appear
+            )
+            
+            // Apply global opacity
             .mult(solid(1, 1, 1, () => opacity))
-            // Blend with video if active
-            .blend(src(o3), videoBackgroundActive ? 0.4 : 0)
+            
+            // Blend with source video for best results
+            .blend(src(o3), 0.1) // Slightly more blending for better effect
             .out();
     },
 };
@@ -1231,7 +1306,7 @@ function updateVideoBackground(enabled) {
     // Make sure Hydra knows about the video state change
     if (enabled) {
         // Ensure video is correctly loaded as source
-        s0.initVideo(document.getElementById('video-background'));
+        s0.init({src: document.getElementById('video-background'), dynamic: true});
         src(s0).out(o3);
     } else {
         solid(0, 0, 0, 0).out(o3);
@@ -1337,20 +1412,32 @@ document.addEventListener('DOMContentLoaded', () => {
                     
                     // Special handling for VHS effect
                     if (selectedViz === 'vhsTape') {
-                        // If we have the external VHS effect available, use it
+                        // Always activate the VHS visualization directly
+                        window.activateVHSVisualization();
+                        
+                        // Also try to activate the external VHS effect if available
                         if (typeof window.activateVHSEffect === 'function') {
                             // But only if it's not already active
                             if (typeof window.isVHSActive === 'undefined' || !window.isVHSActive) {
-                                window.activateVHSEffect(document.getElementById('hydra-canvas'));
-                                console.log("Activated external VHS effect");
+                                try {
+                                    const hydraCanvas = document.getElementById('hydra-canvas');
+                                    window.activateVHSEffect(hydraCanvas);
+                                    console.log("Activated external VHS effect");
+                                } catch (err) {
+                                    console.warn("Error activating external VHS effect:", err);
+                                }
                             }
                         }
                     } else {
                         // If switching away from VHS and external effect is active, deactivate it
                         if (typeof window.isVHSActive !== 'undefined' && window.isVHSActive) {
                             if (typeof window.deactivateVHSEffect === 'function') {
-                                window.deactivateVHSEffect();
-                                console.log("Deactivated external VHS effect");
+                                try {
+                                    window.deactivateVHSEffect();
+                                    console.log("Deactivated external VHS effect");
+                                } catch (err) {
+                                    console.warn("Error deactivating external VHS effect:", err);
+                                }
                             }
                         }
                     }
@@ -1432,7 +1519,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 videoBackground.style.opacity = '1.0';
                 
                 // Reinitialize video as source
-                s0.initVideo(document.getElementById('video-background'));
+                s0.init({src: document.getElementById('video-background'), dynamic: true});
                 
                 // Play the video
                 videoBackground.play().catch(err => {
@@ -1474,5 +1561,28 @@ window.resetViz = function() {
             activeVisualizations.add(currentViz);
             updateVisualizationUI();
         }
+    }
+};
+
+// Add a global function to activate the VHS visualization
+window.activateVHSVisualization = function() {
+    console.log("Activating VHS visualization in Hydra");
+    
+    // Make sure video is visible
+    if (!videoBackgroundActive) {
+        updateVideoBackground(true);
+    }
+    
+    // Activate the VHS visualization
+    document.querySelectorAll('.viz-button').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    
+    const vhsButton = document.querySelector('.viz-button[data-viz="vhsTape"]');
+    if (vhsButton) {
+        vhsButton.classList.add('active');
+        activeVisualizations.clear();
+        activeVisualizations.add('vhsTape');
+        updateVisualizationUI();
     }
 }; 
