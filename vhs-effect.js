@@ -991,3 +991,48 @@ window.addEventListener('load', async () => {
 
 // Make updateAudioIntensity globally available 
 window.updateVHSAudio = updateAudioIntensity; 
+
+// Add custom video toggle handling that works with VHS effect
+window.addEventListener('load', function() {
+    console.log("Adding additional video toggle handler");
+    
+    // Wait a moment for everything to initialize
+    setTimeout(() => {
+        // Get the video toggle
+        const videoToggle = document.getElementById('video-toggle');
+        if (videoToggle) {
+            // Add an additional listener that runs AFTER the original handlers
+            // This won't interfere with existing functionality
+            videoToggle.addEventListener('change', function(e) {
+                // Get video element
+                const videoBackground = document.getElementById('video-background');
+                if (!videoBackground) return;
+                
+                // Simple direct control of video based on toggle state
+                if (e.target.checked) {
+                    // Toggle is ON - ensure video is visible and playing
+                    videoBackground.style.display = 'block';
+                    videoBackground.style.opacity = '1.0';
+                    
+                    if (videoBackground.paused) {
+                        videoBackground.play().catch(err => {
+                            console.log("Could not play video:", err);
+                        });
+                    }
+                } else if (!window.isVHSActive) {
+                    // Toggle is OFF and VHS is not active - hide video
+                    videoBackground.style.opacity = '0';
+                    
+                    // Pause after a delay
+                    setTimeout(() => {
+                        if (!videoToggle.checked && !window.isVHSActive) {
+                            videoBackground.pause();
+                        }
+                    }, 200);
+                }
+            });
+            
+            console.log("Additional video toggle handler added");
+        }
+    }, 500);
+}); 
