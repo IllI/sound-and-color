@@ -1291,6 +1291,27 @@ setupAudio().then((audioData) => {
             // Handle VHS effect activation/deactivation
             const hasVHS = activeVizArray.includes('vhsTape');
             
+            // When VHS is activated, ensure video is enabled
+            if (hasVHS && !videoBackgroundActive) {
+                // Force video on for VHS
+                videoBackgroundActive = true;
+                const videoElement = document.getElementById('video-background');
+                if (videoElement) {
+                    videoElement.style.opacity = '1.0';
+                    // Ensure video is playing
+                    if (videoElement.paused) {
+                        videoElement.play().catch(err => {
+                            console.warn("Error playing video for VHS:", err);
+                        });
+                    }
+                }
+                // Update video toggle UI
+                const videoToggle = document.getElementById('video-toggle');
+                if (videoToggle) {
+                    videoToggle.checked = true;
+                }
+            }
+            
             // Activate VHS effect if needed
             if (hasVHS && typeof window.activateVHSEffect === 'function' && 
                 (typeof window.isVHSActive === 'undefined' || !window.isVHSActive)) {
@@ -1303,7 +1324,15 @@ setupAudio().then((audioData) => {
                 window.deactivateVHSEffect();
             }
             
-            // If we have only one active visualization
+            // Ensure video is loaded in source buffer
+            if (videoBackgroundActive) {
+                src(s0).out(o3);
+            }
+            
+            // Clear main buffer before drawing
+            solid(0, 0, 0, 1).out(o0);
+            
+            // If we have only one active visualization (including VHS)
             if (activeVizArray.length === 1) {
                 const vizName = activeVizArray[0];
                 if (visualizations[vizName]) {
@@ -1313,111 +1342,44 @@ setupAudio().then((audioData) => {
                 return;
             }
             
-            // For multiple visualizations, we need a more sophisticated approach:
+            // Handle multiple visualizations
             
-            // 1. Start with a clean slate
-            solid(0, 0, 0, 1).out(o0);
-            
-            // 2. Run visualizations one by one with proper blending
+            // Run visualizations one by one with proper blending
             for (let i = 0; i < activeVizArray.length; i++) {
                 const vizName = activeVizArray[i];
-                
                 if (!visualizations[vizName]) continue;
                 
-                // Special handling for complex visualizations
-                if (vizName === 'geometric') {
-                    // For geometric, we need to use colors from video and be careful with blending
-                    try {
-                        // Store current main output
-                        src(o0).out(o2);
-                        
-                        // Clear o0 for the new viz
-                        solid(0, 0, 0, 0).out(o0);
-                        
-                        // Make sure video is properly captured for geometric effect
-                        if (videoBackgroundActive) {
-                            src(s0).out(o3);
-                        }
-                        
-                        // Sample video colors (use defaults if video not active)
-                        const color = videoBackgroundActive ? getVideoColor(0) : {r: 200, g: 200, b: 200};
-                        const normalizedColor = {
-                            r: color.r / 255, 
-                            g: color.g / 255, 
-                            b: color.b / 255
-                        };
-                        
-                        // Always use the enhanced version with video color influence
-                        runGeometricWithColors(
-                            transitionLevel,
-                            isSilent,
-                            currentOpacity * 0.8,
-                            normalizedColor
-                        );
-                        
-                        // Blend back with stored output - different blend for video vs non-video
-                        if (videoBackgroundActive) {
-                            // When video is active, use layer blend to preserve video content
-                            src(o0).layer(src(o2).mult(solid(1,1,1,0.7))).out(o0);
-                        } else {
-                            // Without video, use standard blend
-                            src(o0).blend(src(o2), 0.7).out(o0);
-                        }
-                    } catch (err) {
-                        console.warn("Error running geometric visualization:", err);
-                        // Fall back to standard rendering
-                        visualizations[vizName](transitionLevel, isSilent, currentOpacity * 0.7);
-                    }
+                // For the first visualization, render directly
+                if (i === 0) {
+                    visualizations[vizName](transitionLevel, isSilent, currentOpacity);
                     continue;
                 }
                 
-                // For other visualizations:
-                // Store current output
-                src(o0).out(o2);
+                // For each subsequent visualization, blend with previous
+                src(o0).out(o2); // Store current state
                 
-                // Clear main buffer for new visualization
+                // Clear main buffer for new layer
                 solid(0, 0, 0, 0).out(o0);
                 
-                // Customize params based on video colors if appropriate
-                if (videoBackgroundActive && i > 0) {
-                    // Use a different color for each visualization
-                    const color = getVideoColor(i % videoColors.length);
-                    const hslColor = rgbToHsl(color);
-                    
-                    // Apply custom parameters for this visualization
-                    runVisualizationWithVideoColors(
-                        vizName, 
-                        transitionLevel,
-                        isSilent,
-                        currentOpacity * 0.7,
-                        color,
-                        hslColor
-                    );
-                } else {
-                    // Standard rendering
-                    visualizations[vizName](transitionLevel, isSilent, currentOpacity * 0.7);
-                }
+                // Run the visualization
+                visualizations[vizName](transitionLevel, isSilent, currentOpacity * 0.7);
                 
-                // Blend with previous output - use different blend modes for variety
+                // Blend with previous output
                 const blendModes = ['add', 'mult', 'diff', 'layer'];
                 const blendMode = blendModes[i % blendModes.length];
                 
                 if (blendMode === 'add') {
                     src(o0).add(src(o2), 0.8).out(o0);
                 } else if (blendMode === 'mult') {
-                    src(o0).mult(src(o2), 0.8).out(o0);
+                    src(o0).mult(src(o2)).out(o0);
                 } else if (blendMode === 'diff') {
-                    src(o0).diff(src(o2), 0.5).out(o0);
+                    src(o0).diff(src(o2)).out(o0);
                 } else { // layer
-                    src(o2).layer(src(o0).thresh(0.1, 0).mult(solid(1,1,1,0.8))).out(o0);
+                    src(o0).layer(src(o2)).out(o0);
                 }
             }
         } catch (error) {
-            console.error("Error in visualization render:", error);
-            // Fallback to single visualization on error
-            if (visualizations[currentViz]) {
-                visualizations[currentViz](transitionLevel, isSilent, currentOpacity);
-            }
+            console.error("Error in visualize:", error);
         }
     }
 
@@ -1822,6 +1784,36 @@ document.addEventListener('DOMContentLoaded', () => {
                     solid(0, 0, 0, 0).out(o1);
                     solid(0, 0, 0, 0).out(o2);
                     
+                    // For VHS effect specifically, handle activating/deactivating
+                    if (selectedViz === 'vhsTape') {
+                        const isVHSActive = activeVisualizations.has('vhsTape');
+                        
+                        if (isVHSActive) {
+                            // When VHS is activated, ensure video background is on
+                            videoBackgroundActive = true;
+                            updateVideoBackground(true);
+                            
+                            // Try to explicitly activate VHS effect right away
+                            const hydraCanvas = document.getElementById('hydra-canvas');
+                            if (typeof window.activateVHSEffect === 'function') {
+                                try {
+                                    window.activateVHSEffect(hydraCanvas);
+                                } catch (err) {
+                                    console.warn("Error activating VHS effect:", err);
+                                }
+                            }
+                        } else {
+                            // When VHS is deactivated, deactivate effect if needed
+                            if (typeof window.deactivateVHSEffect === 'function') {
+                                try {
+                                    window.deactivateVHSEffect();
+                                } catch (err) {
+                                    console.warn("Error deactivating VHS effect:", err);
+                                }
+                            }
+                        }
+                    }
+                    
                     // Keep video in o3 if active
                     if (videoBackgroundActive) {
                         src(s0).out(o3);
@@ -2189,9 +2181,9 @@ window.activateVHSEffect = function(canvas) {
         video.style.filter = 'saturate(115%) contrast(105%) brightness(105%)';
     }
     
-    // Apply canvas filter for VHS look
+    // Apply canvas filter for VHS look - subtle to work with other effects
     if (canvas) {
-        canvas.style.filter = 'saturate(130%) contrast(110%) brightness(110%) blur(0.5px)';
+        canvas.style.filter = 'saturate(110%) contrast(105%) brightness(105%)';
     }
     
     return true;
@@ -2223,17 +2215,17 @@ window.deactivateVHSEffect = function() {
 window.updateVHSAudio = function(audioLevel) {
     if (!window.isVHSActive) return false;
     
-    // Apply audio-reactive effects to canvas
+    // Apply audio-reactive effects to canvas - more subtle
     const canvas = document.getElementById('hydra-canvas');
     if (!canvas) return false;
     
-    // Scale audio level for more visible effect
-    const scaledLevel = Math.max(0.1, Math.min(1.0, audioLevel * 2));
+    // Scale audio level for effect
+    const scaledLevel = Math.max(0.1, Math.min(1.0, audioLevel * 1.5));
     
-    // Add audio-reactive filters
-    const saturation = 120 + (scaledLevel * 30);
-    const contrast = 105 + (scaledLevel * 15);
-    canvas.style.filter = `saturate(${saturation}%) contrast(${contrast}%) brightness(110%) blur(0.5px)`;
+    // Add audio-reactive filters - more subtle to work with other effects
+    const saturation = 110 + (scaledLevel * 10); // 110-120%
+    const contrast = 105 + (scaledLevel * 5);    // 105-110%
+    canvas.style.filter = `saturate(${saturation}%) contrast(${contrast}%) brightness(105%)`;
     
     return true;
 };
