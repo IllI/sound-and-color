@@ -1232,48 +1232,125 @@ setupAudio().then((audioData) => {
         // Ensure video is properly captured as a source
         if (videoBackgroundActive) {
             src(s0).out(o3);
+            
+            // Ensure color sampling is active when video is visible
+            if (!isColorSamplingActive && activeVisualizations.size > 0) {
+                startColorSampling();
+            }
+        } else if (isColorSamplingActive && activeVisualizations.size <= 1) {
+            // Stop color sampling if no longer needed
+            stopColorSampling();
         }
         
         try {
             // Get active visualizations as array
             const activeVizArray = Array.from(activeVisualizations);
             
+            // If we have no active visualizations or VHS is the only one
+            if (activeVizArray.length === 0 || 
+                (activeVizArray.length === 1 && activeVizArray[0] === 'vhsTape')) {
+                // Just render black or let VHS handle it
+                solid(0, 0, 0, 1).out(o0);
+                return;
+            }
+            
             // If we have only one active visualization
             if (activeVizArray.length === 1) {
                 const vizName = activeVizArray[0];
                 if (visualizations[vizName]) {
-                    // Run the visualization
+                    // Run the visualization normally
                     visualizations[vizName](transitionLevel, isSilent, currentOpacity);
                 }
                 return;
             }
             
-            // For multiple visualizations, we need a simpler approach to avoid buffer conflicts
+            // For multiple visualizations, we need a more sophisticated approach:
             
-            // Start with a clean slate
+            // 1. Start with a clean slate
             solid(0, 0, 0, 1).out(o0);
             
-            // Run visualizations one by one with simpler blending
+            // 2. Run visualizations one by one with proper blending
             for (let i = 0; i < activeVizArray.length; i++) {
                 const vizName = activeVizArray[i];
                 
                 if (!visualizations[vizName]) continue;
                 
-                // For the first visualization, just run it directly
-                if (i === 0) {
-                    visualizations[vizName](transitionLevel, isSilent, currentOpacity);
+                // Special handling for complex visualizations
+                if (vizName === 'geometric') {
+                    // For geometric, we need to use colors from video and be careful with blending
+                    try {
+                        // Store current main output
+                        src(o0).out(o2);
+                        
+                        // Clear o0 for the new viz
+                        solid(0, 0, 0, 0).out(o0);
+                        
+                        // Sample video colors
+                        const color = getVideoColor(0);
+                        const normalizedColor = {
+                            r: color.r / 255, 
+                            g: color.g / 255, 
+                            b: color.b / 255
+                        };
+                        
+                        // Run geometric with video colors
+                        runGeometricWithColors(
+                            transitionLevel,
+                            isSilent,
+                            currentOpacity * 0.8,
+                            normalizedColor
+                        );
+                        
+                        // Blend back with stored output
+                        src(o0).blend(src(o2), 0.7).out(o0);
+                    } catch (err) {
+                        console.warn("Error running geometric visualization:", err);
+                        // Fall back to standard rendering
+                        visualizations[vizName](transitionLevel, isSilent, currentOpacity * 0.7);
+                    }
                     continue;
                 }
                 
-                // For subsequent visualizations, store current output
+                // For other visualizations:
+                // Store current output
                 src(o0).out(o2);
                 
-                // Clear main buffer and run next visualization
+                // Clear main buffer for new visualization
                 solid(0, 0, 0, 0).out(o0);
-                visualizations[vizName](transitionLevel, isSilent, currentOpacity * 0.7);
                 
-                // Blend with stored result using a simple add blend
-                src(o2).add(src(o0), 0.8).out(o0);
+                // Customize params based on video colors if appropriate
+                if (videoBackgroundActive && i > 0) {
+                    // Use a different color for each visualization
+                    const color = getVideoColor(i % videoColors.length);
+                    const hslColor = rgbToHsl(color);
+                    
+                    // Apply custom parameters for this visualization
+                    runVisualizationWithVideoColors(
+                        vizName, 
+                        transitionLevel,
+                        isSilent,
+                        currentOpacity * 0.7,
+                        color,
+                        hslColor
+                    );
+                } else {
+                    // Standard rendering
+                    visualizations[vizName](transitionLevel, isSilent, currentOpacity * 0.7);
+                }
+                
+                // Blend with previous output - use different blend modes for variety
+                const blendModes = ['add', 'mult', 'diff', 'layer'];
+                const blendMode = blendModes[i % blendModes.length];
+                
+                if (blendMode === 'add') {
+                    src(o0).add(src(o2), 0.8).out(o0);
+                } else if (blendMode === 'mult') {
+                    src(o0).mult(src(o2), 0.8).out(o0);
+                } else if (blendMode === 'diff') {
+                    src(o0).diff(src(o2), 0.5).out(o0);
+                } else { // layer
+                    src(o2).layer(src(o0).thresh(0.1, 0).mult(solid(1,1,1,0.8))).out(o0);
+                }
             }
         } catch (error) {
             console.error("Error in visualization render:", error);
@@ -1289,7 +1366,83 @@ setupAudio().then((audioData) => {
     console.error("Error in audio visualization setup:", err);
 });
 
-// Video background toggle
+// Function to run geometric visualization with video colors
+function runGeometricWithColors(audioLevel, isSilent, opacity, color) {
+    try {
+        // Extract or compute parameters based on video colors
+        const colorMultiplier = Math.max(0.3, (color.r + color.g + color.b) / 3);
+        const hue = (color.r * 0.3 + color.g * 0.59 + color.b * 0.11) * 360;
+        
+        // Create a custom version of the geometric visualization with color influence
+        shape(4) // square base shape
+            .color(color.r, color.g, color.b) // Use video colors
+            .scale(() => 1.5 + audioLevel * 2) // Scale based on audio
+            .rotate(() => time * 0.1)
+            .repeat(() => Math.floor(3 + audioLevel * 5)) // More repetition with louder audio
+            .kaleid(() => Math.floor(2 + audioLevel * 3))
+            .scale(() => 0.9 + audioLevel * 0.3)
+            .modulate(
+                noise(() => 2 + audioLevel * 5)
+                    .color(color.r, color.g, color.b)
+                    .brightness(() => -0.5 + audioLevel * 1)
+            )
+            .out(o0);
+    } catch (err) {
+        console.warn("Error in geometric color visualization:", err);
+        // Fall back to standard geometric visualization
+        if (visualizations.geometric) {
+            visualizations.geometric(audioLevel, isSilent, opacity);
+        }
+    }
+}
+
+// Function to run any visualization with video color influence
+function runVisualizationWithVideoColors(vizName, audioLevel, isSilent, opacity, rgbColor, hslColor) {
+    try {
+        // Default to standard visualization if no special handling
+        if (!visualizations[vizName]) {
+            return;
+        }
+        
+        // Add specific color-influenced versions for each visualization
+        switch(vizName) {
+            case 'chalk':
+                // Chalk with video color influence
+                osc(10, 0.1, () => audioLevel * 1.5)
+                    .color(rgbColor.r/255, rgbColor.g/255, rgbColor.b/255)
+                    .kaleid(5)
+                    .mask(shape(4, 0.5, 0.001)
+                        .scale(() => 1.5 + audioLevel * 2)
+                        .repeat(5, 5)
+                    )
+                    .modulateScale(noise(2, 0.1), 0.5)
+                    .out(o0);
+                break;
+                
+            case 'neon':
+                // Neon with video colors
+                osc(30, 0.1, () => audioLevel * 2)
+                    .color(rgbColor.r/255, rgbColor.g/255, rgbColor.b/255)
+                    .rotate(() => time * 0.1)
+                    .modulate(noise(3, 0.1).brightness(-0.5))
+                    .out(o0);
+                break;
+                
+            // Add other visualization cases as needed
+                
+            default:
+                // For other visualizations, just use the standard implementation
+                visualizations[vizName](audioLevel, isSilent, opacity);
+                break;
+        }
+    } catch (err) {
+        console.warn(`Error applying video colors to ${vizName}:`, err);
+        // Fall back to standard visualization
+        visualizations[vizName](audioLevel, isSilent, opacity);
+    }
+}
+
+// Video background toggle update
 function updateVideoBackground(enabled) {
     // Update state before anything else
     videoBackgroundActive = enabled;
@@ -1342,6 +1495,11 @@ function updateVideoBackground(enabled) {
             });
         }
         
+        // Start color sampling if there are multiple visualizations active
+        if (activeVisualizations.size > 1) {
+            startColorSampling();
+        }
+        
         console.log("Video background enabled");
     } else {
         // Only hide video if VHS effect is not active
@@ -1354,6 +1512,11 @@ function updateVideoBackground(enabled) {
             
             // Make canvas fully opaque
             hydraCanvas.style.opacity = '1';
+            
+            // Stop color sampling if it's active
+            if (isColorSamplingActive) {
+                stopColorSampling();
+            }
             
             console.log("Video background disabled");
         }
@@ -1377,6 +1540,88 @@ function updateVideoBackground(enabled) {
     }
 }
 
+// Initialize color sampling on page load
+document.addEventListener('DOMContentLoaded', () => {
+    console.log("Initializing color sampling module");
+    
+    // Initialize color sampling canvas
+    initColorSampling();
+    
+    // Add video toggle functionality
+    const videoToggle = document.getElementById('video-toggle');
+    if (videoToggle) {
+        videoToggle.addEventListener('change', function(e) {
+            // Update video background state
+            updateVideoBackground(e.target.checked);
+            
+            // Start or stop color sampling based on toggle state and active visualizations
+            if (e.target.checked && activeVisualizations.size > 1) {
+                startColorSampling();
+            } else if (!e.target.checked && isColorSamplingActive && 
+                       (!activeVisualizations.has('vhsTape') || activeVisualizations.size <= 1)) {
+                stopColorSampling();
+            }
+        });
+    }
+    
+    // Add a button to toggle between single and multi-visualization modes
+    const buttonGroup = document.querySelector('.button-group');
+    if (buttonGroup && !document.querySelector('.multi-viz-toggle')) {
+        const toggleButton = document.createElement('button');
+        toggleButton.className = 'multi-viz-toggle';
+        toggleButton.textContent = 'Enable Multi-Viz Mode';
+        toggleButton.style.marginTop = '10px';
+        toggleButton.style.padding = '5px';
+        toggleButton.style.backgroundColor = 'rgba(70, 130, 180, 0.6)';
+        toggleButton.style.border = 'none';
+        toggleButton.style.borderRadius = '3px';
+        toggleButton.style.color = 'white';
+        toggleButton.style.cursor = 'pointer';
+        
+        toggleButton.addEventListener('click', function() {
+            const isMultiMode = this.classList.contains('active');
+            
+            if (isMultiMode) {
+                // Switching to single mode
+                this.classList.remove('active');
+                this.textContent = 'Enable Multi-Viz Mode';
+                this.style.backgroundColor = 'rgba(70, 130, 180, 0.6)';
+                
+                // If we have multiple visualizations, keep only the first one
+                if (activeVisualizations.size > 1) {
+                    const firstViz = Array.from(activeVisualizations)[0];
+                    activeVisualizations.clear();
+                    activeVisualizations.add(firstViz);
+                    currentViz = firstViz;
+                    
+                    // Update UI
+                    updateVisualizationUI();
+                }
+                
+                // Stop color sampling if it's active
+                if (isColorSamplingActive) {
+                    stopColorSampling();
+                }
+            } else {
+                // Switching to multi mode
+                this.classList.add('active');
+                this.textContent = 'Disable Multi-Viz Mode';
+                this.style.backgroundColor = 'rgba(220, 20, 60, 0.6)';
+                
+                // Start color sampling if video is active
+                if (videoBackgroundActive) {
+                    startColorSampling();
+                }
+                
+                // Show helper tip
+                alert('Multi-visualization mode enabled! Click on multiple visualization buttons to layer them. The video background colors will be sampled to influence the visualizations.');
+            }
+        });
+        
+        buttonGroup.parentElement.appendChild(toggleButton);
+    }
+});
+
 // Update visualization buttons based on active set
 function updateVisualizationUI() {
     try {
@@ -1399,6 +1644,34 @@ function updateVisualizationUI() {
                 btn.classList.remove('active');
             }
         });
+        
+        // Update helper message
+        let helperMessage = document.querySelector('.multi-select-helper');
+        if (!helperMessage) {
+            helperMessage = document.createElement('div');
+            helperMessage.className = 'multi-select-helper';
+            helperMessage.style.color = 'white';
+            helperMessage.style.fontSize = '12px';
+            helperMessage.style.opacity = '0.7';
+            helperMessage.style.marginTop = '8px';
+            helperMessage.style.textAlign = 'center';
+            buttonGroup.parentElement.appendChild(helperMessage);
+        }
+        
+        // Show different messages based on active visualizations
+        if (activeVisualizations.size > 1) {
+            helperMessage.textContent = 'Multiple visualizations active - colors sampled from video';
+            // Start color sampling if it's not already active
+            if (!isColorSamplingActive) {
+                startColorSampling();
+            }
+        } else {
+            helperMessage.textContent = 'Click to select or Ctrl+click for multiple';
+            // Stop color sampling if not needed
+            if (isColorSamplingActive && !videoBackgroundActive) {
+                stopColorSampling();
+            }
+        }
     } catch (error) {
         console.error("Error updating visualization UI:", error);
     }
@@ -1422,90 +1695,73 @@ document.addEventListener('DOMContentLoaded', () => {
         
         vizButtons.forEach(button => {
             button.addEventListener('click', (e) => {
+                e.preventDefault(); // Prevent default to handle everything ourselves
+                
                 // Get the selected visualization
                 const selectedViz = button.getAttribute('data-viz');
                 
                 // Debug log
                 console.log(`Toggling visualization: ${selectedViz}`);
                 
-                // Check if the visualization exists
-                if (visualizations[selectedViz]) {
-                    // Toggle active state for multi-select
-                    if (e.ctrlKey || e.metaKey) {
-                        // Multi-select mode (Ctrl/Cmd + click)
-                        if (button.classList.contains('active') && activeVisualizations.size > 1) {
-                            // Remove from active visualizations
-                            activeVisualizations.delete(selectedViz);
-                            console.log(`Removed ${selectedViz} from active visualizations`);
-                        } else {
-                            // Add to active visualizations
-                            activeVisualizations.add(selectedViz);
-                            console.log(`Added ${selectedViz} to active visualizations`);
-                        }
-                    } else {
-                        // Single-select mode (normal click)
-                        // Reset active visualizations
-                        activeVisualizations.clear();
-                        activeVisualizations.add(selectedViz);
+                // Special handling for VHS Tape - needs to be exclusive
+                if (selectedViz === 'vhsTape') {
+                    // If VHS is being deactivated
+                    if (activeVisualizations.has('vhsTape')) {
+                        // VHS is active, deactivate it
+                        activeVisualizations.delete('vhsTape');
                         
-                        // Also update currentViz for compatibility
-                        currentViz = selectedViz;
-                        console.log(`Set ${selectedViz} as the only active visualization`);
-                    }
-                    
-                    // Update UI
-                    updateVisualizationUI();
-                    
-                    // Force buffer reinitialize to ensure clean state
-                    // Clear all output buffers explicitly to avoid stale data
-                    solid(0, 0, 0, 0).out(o0);
-                    solid(0, 0, 0, 0).out(o1);
-                    solid(0, 0, 0, 0).out(o2);
-                    
-                    // Keep video in o3 if active
-                    if (videoBackgroundActive) {
-                        src(s0).out(o3);
-                    } else {
-                        solid(0, 0, 0, 0).out(o3);
-                    }
-                    
-                    // Special handling for VHS effect
-                    if (selectedViz === 'vhsTape') {
-                        // Always activate the VHS visualization directly but don't force video
-                        window.activateVHSVisualization = function() {
-                            console.log("Activating VHS visualization in Hydra");
-                            
-                            // Activate the VHS visualization
-                            document.querySelectorAll('.viz-button').forEach(btn => {
-                                btn.classList.remove('active');
-                            });
-                            
-                            const vhsButton = document.querySelector('.viz-button[data-viz="vhsTape"]');
-                            if (vhsButton) {
-                                vhsButton.classList.add('active');
-                                activeVisualizations.clear();
-                                activeVisualizations.add('vhsTape');
-                                updateVisualizationUI();
-                            }
-                        };
-                        
-                        window.activateVHSVisualization();
-                        
-                        // Also try to activate the external VHS effect if available
-                        if (typeof window.activateVHSEffect === 'function') {
-                            // But only if it's not already active
-                            if (typeof window.isVHSActive === 'undefined' || !window.isVHSActive) {
+                        // Deactivate external VHS effect if it exists
+                        if (typeof window.isVHSActive !== 'undefined' && window.isVHSActive) {
+                            if (typeof window.deactivateVHSEffect === 'function') {
                                 try {
-                                    const hydraCanvas = document.getElementById('hydra-canvas');
-                                    window.activateVHSEffect(hydraCanvas);
-                                    console.log("Activated external VHS effect");
+                                    window.deactivateVHSEffect();
+                                    console.log("Deactivated external VHS effect");
                                 } catch (err) {
-                                    console.warn("Error activating external VHS effect:", err);
+                                    console.warn("Error deactivating external VHS effect:", err);
                                 }
                             }
                         }
+                        
+                        // Update UI
+                        updateVisualizationUI();
+                        
+                        // Keep video state consistent
+                        setTimeout(() => {
+                            if (videoBackgroundActive) {
+                                enforceVideoVisibility(true);
+                            }
+                        }, 100);
+                        
+                        return;
                     } else {
-                        // If switching away from VHS and external effect is active, deactivate it
+                        // VHS is not active, make it the only active visualization
+                        activeVisualizations.clear();
+                        activeVisualizations.add('vhsTape');
+                        
+                        // Activate external VHS effect
+                        if (typeof window.activateVHSEffect === 'function') {
+                            try {
+                                const hydraCanvas = document.getElementById('hydra-canvas');
+                                window.activateVHSEffect(hydraCanvas);
+                                console.log("Activated external VHS effect");
+                            } catch (err) {
+                                console.warn("Error activating external VHS effect:", err);
+                            }
+                        }
+                        
+                        // Update UI
+                        updateVisualizationUI();
+                        return;
+                    }
+                }
+                
+                // Check if the visualization exists
+                if (visualizations[selectedViz]) {
+                    // If VHS is currently active, deactivate it first
+                    if (activeVisualizations.has('vhsTape')) {
+                        activeVisualizations.delete('vhsTape');
+                        
+                        // Deactivate external VHS effect
                         if (typeof window.isVHSActive !== 'undefined' && window.isVHSActive) {
                             if (typeof window.deactivateVHSEffect === 'function') {
                                 try {
@@ -1517,13 +1773,67 @@ document.addEventListener('DOMContentLoaded', () => {
                             }
                         }
                     }
+                
+                    // For all other visualizations - handle multi-select or toggle
+                    if (e.ctrlKey || e.metaKey) {
+                        // Multi-select mode (Ctrl/Cmd + click)
+                        if (activeVisualizations.has(selectedViz)) {
+                            // Toggle off if already active
+                            activeVisualizations.delete(selectedViz);
+                            console.log(`Removed ${selectedViz} from active visualizations`);
+                        } else {
+                            // Add to active visualizations
+                            activeVisualizations.add(selectedViz);
+                            console.log(`Added ${selectedViz} to active visualizations`);
+                        }
+                    } else {
+                        // Single-select mode (normal click) - just toggle the clicked one
+                        if (activeVisualizations.has(selectedViz)) {
+                            // If this is the only active visualization, keep it active
+                            if (activeVisualizations.size > 1) {
+                                activeVisualizations.delete(selectedViz);
+                            }
+                        } else {
+                            // Clear others and set this as the only active one
+                            activeVisualizations.clear();
+                            activeVisualizations.add(selectedViz);
+                        }
+                        
+                        // Update currentViz for compatibility with old code
+                        currentViz = selectedViz;
+                    }
                     
-                    // Always ensure video visibility is maintained if it should be active
-                    // This needs to happen AFTER the VHS effect changes to avoid conflicts
+                    // Special handling for geometric effect
+                    if (selectedViz === 'geometric' && activeVisualizations.has('geometric')) {
+                        // Ensure geometric gets proper initialization
+                        try {
+                            // Force geometry shader to reinitialize with proper params
+                            console.log("Ensuring geometric visualization is properly initialized");
+                            
+                            // Add any special initialization for geometric here if needed
+                            
+                            // Start color sampling for geometric visualization
+                            if (!isColorSamplingActive) {
+                                startColorSampling();
+                            }
+                        } catch (err) {
+                            console.warn("Error initializing geometric visualization:", err);
+                        }
+                    }
+                    
+                    // Update UI and hydra state
+                    updateVisualizationUI();
+                    
+                    // Clear hydra buffers before applying new visualizations
+                    solid(0, 0, 0, 0).out(o0);
+                    solid(0, 0, 0, 0).out(o1);
+                    solid(0, 0, 0, 0).out(o2);
+                    
+                    // Keep video in o3 if active
                     if (videoBackgroundActive) {
-                        setTimeout(() => {
-                            window.enforceVideoVisibility(true);
-                        }, 50);
+                        src(s0).out(o3);
+                    } else {
+                        solid(0, 0, 0, 0).out(o3);
                     }
                     
                     // Log active visualizations
@@ -1664,4 +1974,143 @@ window.activateVHSVisualization = function() {
         activeVisualizations.add('vhsTape');
         updateVisualizationUI();
     }
-}; 
+};
+
+// Add video color sampling functionality
+
+// Create an off-screen canvas for video frame analysis
+let videoColorCanvas;
+let videoColorCtx;
+let videoColors = [
+    {r: 0, g: 0, b: 0},  // default colors if no video
+    {r: 255, g: 255, b: 255},
+    {r: 128, g: 128, b: 128},
+    {r: 200, g: 200, b: 200},
+    {r: 50, g: 50, b: 50}
+];
+let isColorSamplingActive = false;
+let colorSamplingInterval = null;
+
+// Initialize color sampling canvas
+function initColorSampling() {
+    if (!videoColorCanvas) {
+        videoColorCanvas = document.createElement('canvas');
+        videoColorCanvas.width = 320;  // smaller size for performance
+        videoColorCanvas.height = 240;
+        videoColorCtx = videoColorCanvas.getContext('2d', { willReadFrequently: true });
+    }
+}
+
+// Sample colors from current video frame
+function sampleColorsFromVideo() {
+    if (!videoColorCanvas || !videoColorCtx) {
+        initColorSampling();
+    }
+    
+    const videoElement = document.getElementById('video-background');
+    if (!videoElement || videoElement.paused || parseFloat(videoElement.style.opacity || 0) < 0.1) {
+        return videoColors; // Return current colors if video isn't visible
+    }
+    
+    try {
+        // Draw current video frame to canvas
+        videoColorCtx.drawImage(videoElement, 0, 0, videoColorCanvas.width, videoColorCanvas.height);
+        
+        // Sample regions (center, corners, etc.)
+        const regions = [
+            {x: videoColorCanvas.width/2, y: videoColorCanvas.height/2},  // center
+            {x: videoColorCanvas.width/4, y: videoColorCanvas.height/4},  // top-left region
+            {x: videoColorCanvas.width*3/4, y: videoColorCanvas.height/4},  // top-right region
+            {x: videoColorCanvas.width/4, y: videoColorCanvas.height*3/4},  // bottom-left region
+            {x: videoColorCanvas.width*3/4, y: videoColorCanvas.height*3/4}  // bottom-right region
+        ];
+        
+        // Get pixel data from each region
+        const newColors = regions.map(region => {
+            const pixelData = videoColorCtx.getImageData(region.x, region.y, 1, 1).data;
+            return {r: pixelData[0], g: pixelData[1], b: pixelData[2]};
+        });
+        
+        // Update the global colors
+        videoColors = newColors;
+        return newColors;
+    } catch (error) {
+        console.error("Error sampling video colors:", error);
+        return videoColors; // Return current colors on error
+    }
+}
+
+// Start color sampling at regular intervals
+function startColorSampling() {
+    if (isColorSamplingActive) return;
+    
+    isColorSamplingActive = true;
+    
+    // Stop any existing interval
+    if (colorSamplingInterval) {
+        clearInterval(colorSamplingInterval);
+    }
+    
+    // Sample colors every 100ms
+    colorSamplingInterval = setInterval(() => {
+        sampleColorsFromVideo();
+    }, 100);
+    
+    console.log("Video color sampling started");
+}
+
+// Stop color sampling
+function stopColorSampling() {
+    isColorSamplingActive = false;
+    
+    if (colorSamplingInterval) {
+        clearInterval(colorSamplingInterval);
+        colorSamplingInterval = null;
+    }
+    
+    console.log("Video color sampling stopped");
+}
+
+// Convert RGB color to hex string for hydra functions
+function rgbToHex(rgb) {
+    return `#${rgb.r.toString(16).padStart(2, '0')}${rgb.g.toString(16).padStart(2, '0')}${rgb.b.toString(16).padStart(2, '0')}`;
+}
+
+// Convert RGB to HSL (useful for some visualizations)
+function rgbToHsl(rgb) {
+    const r = rgb.r / 255;
+    const g = rgb.g / 255;
+    const b = rgb.b / 255;
+    
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    let h, s, l = (max + min) / 2;
+    
+    if (max === min) {
+        h = s = 0; // achromatic
+    } else {
+        const d = max - min;
+        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+        
+        switch (max) {
+            case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+            case g: h = (b - r) / d + 2; break;
+            case b: h = (r - g) / d + 4; break;
+        }
+        
+        h /= 6;
+    }
+    
+    return {h, s, l};
+}
+
+// Helper to get a normalized color for visualization
+function getVideoColor(index = 0, fallbackColor = {r: 255, g: 255, b: 255}) {
+    if (!videoColors || videoColors.length === 0) {
+        return fallbackColor;
+    }
+    
+    // Ensure index is within bounds
+    const safeIndex = Math.min(index, videoColors.length - 1);
+    return videoColors[safeIndex] || fallbackColor;
+} 
