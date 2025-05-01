@@ -1055,54 +1055,89 @@ const visualizations = {
         // Make sure video is properly configured
         const videoBackground = document.getElementById('video-background');
         if (videoBackground) {
-            videoBackground.style.display = 'block';
             videoBackground.style.opacity = '1.0';
-            videoBackground.style.zIndex = '0'; // Make sure it's below our effects
             
-            // If video is paused, try to play it
-            if (videoBackground.paused && !window.isPlayingRequested) {
-                window.isPlayingRequested = true;
-                videoBackground.play()
-                    .catch(err => {
-                        console.warn("Error playing video for VHS effect:", err);
-                        // If local video fails, try sample video
-                        const sampleVideoToggle = document.getElementById('use-sample-video');
-                        if (sampleVideoToggle && !sampleVideoToggle.checked) {
-                            sampleVideoToggle.checked = true;
-                            
-                            // Update video source
-                            videoBackground.querySelector('source').src = sampleVideoUrl;
-                            videoBackground.load();
-                            
-                            // Try playing again
-                            videoBackground.addEventListener('loadeddata', () => {
-                                videoBackground.play().catch(e => 
-                                    console.error("Still couldn't play video:", e));
-                            }, { once: true });
-                        }
-                        window.isPlayingRequested = false;
-                    })
-                    .then(() => {
-                        window.isPlayingRequested = false;
-                    });
+            // Try to play the video if it's paused
+            if (videoBackground.paused) {
+                videoBackground.play().catch(err => {
+                    console.warn("Error playing video for VHS:", err);
+                });
             }
         }
         
-        // Always capture video source to process
-        src(s0).out(o3);
+        // Generate strong VHS-style overlay
+        // Use a different approach to ensure visibility even with other effects
         
-        // When video is active, base glitched effect on video
-        src(s0)
-            .pixelate(64, 64) // More extreme pixelation
-            .modulate(
-                noise(3).add(osc(7, 0).thresh(0.5)), 
-                0.03 + (level * 0.04) // More distortion that reacts to audio
-            )
-            .scrollX(() => Math.sin(time * 0.2) * 0.01)
-            .color(1.3, 0.85, 1.15) // More extreme color shift
-            .contrast(1.2) // Higher contrast
-            .brightness(0.05) // Darker for more dramatic look
-            .out(o0);
+        // For when the VHS effect is the only one active
+        if (activeVisualizations.size === 1 && activeVisualizations.has('vhsTape')) {
+            // When VHS is the only effect, use the standard implementation
+            src(s0)
+                .pixelate(64, 64)
+                .modulate(
+                    noise(3).add(osc(7, 0).thresh(0.5)), 
+                    0.03 + (level * 0.04)
+                )
+                .scrollX(() => Math.sin(time * 0.2) * 0.01)
+                .color(1.3, 0.85, 1.15)
+                .contrast(1.2)
+                .brightness(0.05)
+                .out(o0);
+                
+            // Strong horizontal tracking lines
+            osc(300, 0)
+                .rotate(Math.PI/2)
+                .thresh(0.7)
+                .color(1, 1, 1)
+                .scrollX(() => time * (0.1 + level * 0.3))
+                .scale(() => 1 + level * 5, 1)
+                .mult(solid(1, 1, 1, () => audioActive ? 0.5 + level * 0.5 : 0))
+                .out(o1);
+                
+            // VHS static/noise layer
+            noise(40)
+                .thresh(() => 0.94 - (level * 0.1))
+                .mult(solid(1, 1, 1, () => audioActive ? 0.1 + level * 0.1 : 0.01))
+                .out(o2);
+                
+            // Combine all layers
+            src(o0)
+                .layer(src(o1))
+                .layer(src(o2))
+                .out(o0);
+        } else {
+            // When VHS is combined with other effects, use a more visible overlay
+            // that will stand out more clearly
+            
+            // Start with source
+            src(s0)
+                .color(1.5, 0.8, 1.2) // Extreme color shift - very noticeable
+                .saturate(1.5)        // High saturation
+                .contrast(1.3)        // High contrast
+                .brightness(0.95)     // Very visible brightness
+                .out(o1);
+                
+            // Create extremely noticeable scanlines
+            osc(200, 0)
+                .rotate(Math.PI/2)
+                .thresh(0.6) 
+                .color(0.2, 0.2, 0.2)
+                .scrollX(() => time * 0.2)
+                .mult(solid(1, 1, 1, 0.4)) // Always visible scanlines
+                .out(o2);
+                
+            // Create obvious VHS static
+            noise(20)
+                .thresh(0.9)
+                .mult(solid(1, 1, 1, 0.15)) // Always visible static
+                .out(o3);
+                
+            // Combine into a single layer for overlay on other effects
+            src(o1)
+                .layer(src(o2))
+                .layer(src(o3))
+                .mult(solid(1, 1, 1, opacity)) // Use passed opacity
+                .out(o0);
+        }
         
         // Make sure VHS effect is activated if available
         if (typeof window.activateVHSEffect === 'function' && 
@@ -1114,89 +1149,6 @@ const visualizations = {
                 console.warn("Error activating VHS external effect:", err);
             }
         }
-        
-        // Strong horizontal tracking lines that react to audio - only visible with sufficient audio
-        osc(300, 0) // Higher frequency lines
-            .rotate(Math.PI/2) // Rotate to make lines horizontal
-            .thresh(0.7) // Thicker lines
-            .color(1, 1, 1)
-            .scrollX(() => time * (0.1 + level * 0.3)) // Scroll horizontally instead of vertically
-            .scale(() => 1 + level * 5, 1) // Much stronger audio reaction on horizontal scale
-            .mult(solid(1, 1, 1, () => audioActive ? 0.5 + level * 0.5 : 0)) // Only show with audio
-            .out(o1);
-        
-        // VHS static/noise layer - more visible and reactive to audio
-        noise(40)
-            .thresh(() => 0.94 - (level * 0.1)) // Threshold changes with audio
-            .mult(solid(1, 1, 1, () => audioActive ? 0.1 + level * 0.1 : 0.01)) // Very subtle if no audio
-            .out(o2);
-        
-        // Final output with enhanced VHS effects
-        src(o0)
-            .layer(src(o1)) // Add tracking lines 
-            .add(src(o2)) // Add noise grain
-            
-            // More dramatic color jitter tied to audio
-            .color(
-                () => 1 + Math.sin(time * 10) * 0.06 * audioMultiplier,
-                () => 1 + Math.cos(time * 10) * 0.04 * audioMultiplier,
-                () => 1 + Math.sin(time * 8) * 0.08 * audioMultiplier
-            )
-            
-            // Head switching noise at bottom - larger and more visible with audio
-            .layer(
-                noise(10).thresh(0.08)
-                .scale(1, 0.12) // Thicker bar
-                .scrollY(-0.44)
-                .mult(solid(1, 1, 1, () => audioActive ? 0.4 + level * 0.2 : 0)) // Only visible with audio
-            )
-            
-            // More pronounced tracking jitter tied to audio
-            .scrollX(() => Math.sin(time * 5 + Math.random()) * 0.008 * (audioActive ? level + 0.2 : 0.01))
-            
-            // More frequent vertical glitches tied to audio
-            .scrollY(() => audioActive && Math.random() > (0.95 - level * 0.2) ? Math.random() * 0.04 - 0.02 : 0)
-            
-            // Enhanced RGB shift effect - more visible with audio
-            .layer(
-                src(o0)
-                .scrollX(() => 0.003 + level * 0.002) // Audio reactive
-                .scrollY(0.001)
-                .color(1.4, 0, 0) // Stronger red
-                .mult(solid(1, 1, 1, () => audioActive ? 0.25 + level * 0.1 : 0.05)) // Less visible without audio
-            )
-            .layer(
-                src(o0)
-                .scrollX(() => -0.003 - level * 0.002) // Audio reactive in opposite direction
-                .scrollY(-0.001)
-                .color(0, 0, 1.4) // Stronger blue
-                .mult(solid(1, 1, 1, () => audioActive ? 0.15 + level * 0.1 : 0.03)) // Less visible without audio
-            )
-            
-            // Horizontal scan lines - always somewhat visible but stronger with audio
-            .layer(
-                osc(800, 0, 0) // Higher frequency scan lines
-                .rotate(Math.PI/2) // Rotate to make lines horizontal
-                .thresh(0.85)
-                .color(1, 1, 1)
-                .mult(solid(1, 1, 1, () => 0.05 + (audioActive ? level * 0.1 : 0))) // Audio reactive
-            )
-            
-            // Random horizontal glitches that happen occasionally with audio
-            .layer(
-                shape(4, 0.9, 0)
-                .scale(2, 0.03)
-                .scrollY(() => audioActive && Math.random() > 0.97 ? Math.random() * 2 - 1 : -2) // Only glitch with audio
-                .color(2, 2, 2) // Bright white
-                .mult(solid(1, 1, 1, () => audioActive && Math.random() > 0.97 ? 0.8 : 0)) // Only appear with audio
-            )
-            
-            // Apply global opacity
-            .mult(solid(1, 1, 1, () => opacity * (audioActive ? 1.0 : 0.5)))
-            
-            // Blend with source video
-            .blend(src(o3), 0.3)
-            .out();
     },
 };
 
@@ -1361,22 +1313,12 @@ setupAudio().then((audioData) => {
                 // Clear main buffer for new layer
                 solid(0, 0, 0, 0).out(o0);
                 
-                // Run the visualization
-                visualizations[vizName](transitionLevel, isSilent, currentOpacity * 0.7);
+                // Run the visualization with standard opacity for clear visibility
+                visualizations[vizName](transitionLevel, isSilent, currentOpacity);
                 
-                // Blend with previous output
-                const blendModes = ['add', 'mult', 'diff', 'layer'];
-                const blendMode = blendModes[i % blendModes.length];
-                
-                if (blendMode === 'add') {
-                    src(o0).add(src(o2), 0.8).out(o0);
-                } else if (blendMode === 'mult') {
-                    src(o0).mult(src(o2)).out(o0);
-                } else if (blendMode === 'diff') {
-                    src(o0).diff(src(o2)).out(o0);
-                } else { // layer
-                    src(o0).layer(src(o2)).out(o0);
-                }
+                // Use simple blending to ensure effects remain visible
+                // Layer blend mode works well for most combinations
+                src(o2).layer(src(o0).mult(solid(1, 1, 1, 0.8))).out(o0);
             }
         } catch (error) {
             console.error("Error in visualize:", error);
@@ -2175,15 +2117,78 @@ window.activateVHSEffect = function(canvas) {
     // Set flag to track VHS state
     window.isVHSActive = true;
     
-    // Apply video filter effects
+    // Apply strong video filter effects
     const video = document.getElementById('video-background');
     if (video) {
-        video.style.filter = 'saturate(115%) contrast(105%) brightness(105%)';
+        video.style.filter = 'saturate(150%) contrast(120%) brightness(110%)';
     }
     
-    // Apply canvas filter for VHS look - subtle to work with other effects
+    // Apply dramatic canvas filter for very visible VHS look
     if (canvas) {
-        canvas.style.filter = 'saturate(110%) contrast(105%) brightness(105%)';
+        canvas.style.filter = 'saturate(140%) contrast(125%) brightness(110%) hue-rotate(5deg)';
+        
+        // Add VHS overlay element if it doesn't exist
+        let vhsOverlay = document.getElementById('vhs-effect-overlay');
+        if (!vhsOverlay) {
+            vhsOverlay = document.createElement('div');
+            vhsOverlay.id = 'vhs-effect-overlay';
+            vhsOverlay.style.position = 'fixed';
+            vhsOverlay.style.top = '0';
+            vhsOverlay.style.left = '0';
+            vhsOverlay.style.width = '100%';
+            vhsOverlay.style.height = '100%';
+            vhsOverlay.style.pointerEvents = 'none';
+            vhsOverlay.style.zIndex = '10'; // Above canvas
+            vhsOverlay.style.mixBlendMode = 'soft-light';
+            
+            // Add scanlines
+            vhsOverlay.style.background = 'linear-gradient(rgba(0,0,0,0), rgba(0,0,0,0.2)), repeating-linear-gradient(transparent, transparent 2px, rgba(0,0,0,0.1) 2px, rgba(0,0,0,0.1) 4px)';
+            
+            // Add animation
+            vhsOverlay.style.animation = 'vhs-scanlines 5s linear infinite';
+            
+            // Add keyframes if they don't exist
+            if (!document.getElementById('vhs-keyframes')) {
+                const style = document.createElement('style');
+                style.id = 'vhs-keyframes';
+                style.textContent = `
+                    @keyframes vhs-scanlines {
+                        0% { background-position: 0 0; }
+                        100% { background-position: 0 100px; }
+                    }
+                    @keyframes vhs-glitch {
+                        0%, 90%, 100% { transform: translateX(0); }
+                        92% { transform: translateX(5px); }
+                        94% { transform: translateX(-3px); }
+                        96% { transform: translateX(5px); }
+                    }
+                `;
+                document.head.appendChild(style);
+            }
+            
+            document.body.appendChild(vhsOverlay);
+        } else {
+            vhsOverlay.style.display = 'block';
+        }
+        
+        // Add occasional subtle glitch effect
+        if (window._vhsGlitchInterval) {
+            clearInterval(window._vhsGlitchInterval);
+        }
+        
+        window._vhsGlitchInterval = setInterval(() => {
+            // Only glitch occasionally
+            if (Math.random() < 0.2) { 
+                // Apply a random horizontal shift
+                const glitchX = Math.random() * 6 - 3; // -3 to 3 pixels
+                canvas.style.transform = `translateX(${glitchX}px)`;
+                
+                // Reset after a short time
+                setTimeout(() => {
+                    canvas.style.transform = 'none';
+                }, 100);
+            }
+        }, 500); // Check every 500ms
     }
     
     return true;
@@ -2194,6 +2199,18 @@ window.deactivateVHSEffect = function() {
     
     // Reset VHS active flag
     window.isVHSActive = false;
+    
+    // Clear glitch interval if it exists
+    if (window._vhsGlitchInterval) {
+        clearInterval(window._vhsGlitchInterval);
+        window._vhsGlitchInterval = null;
+    }
+    
+    // Remove the VHS overlay
+    const vhsOverlay = document.getElementById('vhs-effect-overlay');
+    if (vhsOverlay) {
+        vhsOverlay.style.display = 'none';
+    }
     
     // Reset canvas effects
     const canvas = document.getElementById('hydra-canvas');
@@ -2215,16 +2232,16 @@ window.deactivateVHSEffect = function() {
 window.updateVHSAudio = function(audioLevel) {
     if (!window.isVHSActive) return false;
     
-    // Apply audio-reactive effects to canvas - more subtle
+    // Apply clearly visible audio-reactive effects
     const canvas = document.getElementById('hydra-canvas');
     if (!canvas) return false;
     
-    // Scale audio level for effect
+    // Scale audio level for noticeable effect
     const scaledLevel = Math.max(0.1, Math.min(1.0, audioLevel * 1.5));
     
-    // Add audio-reactive filters - more subtle to work with other effects
-    const saturation = 110 + (scaledLevel * 10); // 110-120%
-    const contrast = 105 + (scaledLevel * 5);    // 105-110%
+    // Add clearly visible audio-reactive filters
+    const saturation = 115 + (scaledLevel * 15);  // 115-130%
+    const contrast = 110 + (scaledLevel * 10);    // 110-120%
     canvas.style.filter = `saturate(${saturation}%) contrast(${contrast}%) brightness(105%)`;
     
     return true;
