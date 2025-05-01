@@ -306,6 +306,25 @@ const visualizations = {
 
     // Geometric patterns
     geometric: (level, isSilent, opacity) => {
+        // Check if video is active to use appropriate rendering
+        if (videoBackgroundActive) {
+            // Ensure video is in buffer o3
+            src(s0).out(o3);
+            
+            // Sample video colors for better blending
+            const color = getVideoColor(0, {r: 200, g: 200, b: 200});
+            const normalizedColor = {
+                r: color.r / 255, 
+                g: color.g / 255, 
+                b: color.b / 255
+            };
+            
+            // Use the enhanced geometric with video colors function
+            runGeometricWithColors(level, isSilent, opacity, normalizedColor);
+            return;
+        }
+        
+        // Standard geometric effect (used when video is not active)
         // Base pattern
         shape(4, 0.4, 0)
             .repeat(() => 3 + level * 5, () => 3 + level * 5)
@@ -1023,61 +1042,77 @@ const visualizations = {
         const audioActive = level > 0.05;
         const audioMultiplier = audioActive ? level * 2 : 0.01;
         
-        // Only use video if it's actually enabled by the user
-        if (videoBackgroundActive) {
-            const videoBackground = document.getElementById('video-background');
-            if (videoBackground) {
-                videoBackground.style.display = 'block';
-                videoBackground.style.opacity = '1.0';
-                videoBackground.style.zIndex = '0'; // Make sure it's below our effects
+        // Always ensure video is enabled when VHS is active
+        if (!videoBackgroundActive) {
+            videoBackgroundActive = true;
+            // Visually update toggle
+            const videoToggle = document.getElementById('video-toggle');
+            if (videoToggle && !videoToggle.checked) {
+                videoToggle.checked = true;
             }
-            
-            // Capture video source to process and blend only if enabled
-            src(s0).out(o3);
-            
-            // When video is active, base glitched effect on video
-            src(s0)
-                .pixelate(64, 64) // More extreme pixelation
-                .modulate(
-                    noise(3).add(osc(7, 0).thresh(0.5)), 
-                    0.03 + (level * 0.04) // More distortion that reacts to audio
-                )
-                .scrollX(() => Math.sin(time * 0.2) * 0.01)
-                .color(1.3, 0.85, 1.15) // More extreme color shift
-                .contrast(1.2) // Higher contrast
-                .brightness(0.05) // Darker for more dramatic look
-                .out(o0);
-        } else {
-            // If video is not enabled, use static noise as base
-            solid(0.1, 0.1, 0.1, 1) // Dark background
-                .add(
-                    noise(3)
-                    .pixelate(64, 64)
-                    .thresh(0.1)
-                    .mult(osc(20, 0.1, 0).color(1.3, 0.85, 1.15))
-                    .brightness(0.05)
-                    .contrast(2)
-                )
-                .out(o3);
-            
-            // Create static-based glitched effect
-            noise(10)
-                .pixelate(64, 64)
-                .modulate(
-                    noise(3).add(osc(7, 0).thresh(0.5)), 
-                    0.03 + (level * 0.04)
-                )
-                .scrollX(() => Math.sin(time * 0.2) * 0.01)
-                .color(1.3, 0.85, 1.15)
-                .contrast(1.2)
-                .brightness(0.05)
-                .out(o0);
         }
+        
+        // Make sure video is properly configured
+        const videoBackground = document.getElementById('video-background');
+        if (videoBackground) {
+            videoBackground.style.display = 'block';
+            videoBackground.style.opacity = '1.0';
+            videoBackground.style.zIndex = '0'; // Make sure it's below our effects
+            
+            // If video is paused, try to play it
+            if (videoBackground.paused && !window.isPlayingRequested) {
+                window.isPlayingRequested = true;
+                videoBackground.play()
+                    .catch(err => {
+                        console.warn("Error playing video for VHS effect:", err);
+                        // If local video fails, try sample video
+                        const sampleVideoToggle = document.getElementById('use-sample-video');
+                        if (sampleVideoToggle && !sampleVideoToggle.checked) {
+                            sampleVideoToggle.checked = true;
+                            
+                            // Update video source
+                            videoBackground.querySelector('source').src = sampleVideoUrl;
+                            videoBackground.load();
+                            
+                            // Try playing again
+                            videoBackground.addEventListener('loadeddata', () => {
+                                videoBackground.play().catch(e => 
+                                    console.error("Still couldn't play video:", e));
+                            }, { once: true });
+                        }
+                        window.isPlayingRequested = false;
+                    })
+                    .then(() => {
+                        window.isPlayingRequested = false;
+                    });
+            }
+        }
+        
+        // Always capture video source to process
+        src(s0).out(o3);
+        
+        // When video is active, base glitched effect on video
+        src(s0)
+            .pixelate(64, 64) // More extreme pixelation
+            .modulate(
+                noise(3).add(osc(7, 0).thresh(0.5)), 
+                0.03 + (level * 0.04) // More distortion that reacts to audio
+            )
+            .scrollX(() => Math.sin(time * 0.2) * 0.01)
+            .color(1.3, 0.85, 1.15) // More extreme color shift
+            .contrast(1.2) // Higher contrast
+            .brightness(0.05) // Darker for more dramatic look
+            .out(o0);
         
         // Make sure VHS effect is activated if available
         if (typeof window.activateVHSEffect === 'function' && 
             (typeof window.isVHSActive === 'undefined' || !window.isVHSActive)) {
-            window.activateVHSEffect(document.getElementById('hydra-canvas'));
+            try {
+                window.activateVHSEffect(document.getElementById('hydra-canvas'));
+                console.log("Activated VHS external effect from within visualization");
+            } catch (err) {
+                console.warn("Error activating VHS external effect:", err);
+            }
         }
         
         // Strong horizontal tracking lines that react to audio - only visible with sufficient audio
@@ -1156,11 +1191,11 @@ const visualizations = {
                 .mult(solid(1, 1, 1, () => audioActive && Math.random() > 0.97 ? 0.8 : 0)) // Only appear with audio
             )
             
-            // Apply global opacity - make effect stronger with audio
+            // Apply global opacity
             .mult(solid(1, 1, 1, () => opacity * (audioActive ? 1.0 : 0.5)))
             
-            // Blend with source video for best results (only if video is active)
-            .blend(src(o3), videoBackgroundActive ? 0.3 : 0.1)
+            // Blend with source video
+            .blend(src(o3), 0.3)
             .out();
     },
 };
@@ -1246,12 +1281,26 @@ setupAudio().then((audioData) => {
             // Get active visualizations as array
             const activeVizArray = Array.from(activeVisualizations);
             
-            // If we have no active visualizations or VHS is the only one
-            if (activeVizArray.length === 0 || 
-                (activeVizArray.length === 1 && activeVizArray[0] === 'vhsTape')) {
-                // Just render black or let VHS handle it
+            // If we have no active visualizations
+            if (activeVizArray.length === 0) {
+                // Just render black
                 solid(0, 0, 0, 1).out(o0);
                 return;
+            }
+            
+            // Handle VHS effect activation/deactivation
+            const hasVHS = activeVizArray.includes('vhsTape');
+            
+            // Activate VHS effect if needed
+            if (hasVHS && typeof window.activateVHSEffect === 'function' && 
+                (typeof window.isVHSActive === 'undefined' || !window.isVHSActive)) {
+                const hydraCanvas = document.getElementById('hydra-canvas');
+                window.activateVHSEffect(hydraCanvas);
+            }
+            // Deactivate VHS effect if not needed
+            else if (!hasVHS && typeof window.isVHSActive !== 'undefined' && 
+                     window.isVHSActive && typeof window.deactivateVHSEffect === 'function') {
+                window.deactivateVHSEffect();
             }
             
             // If we have only one active visualization
@@ -1285,15 +1334,20 @@ setupAudio().then((audioData) => {
                         // Clear o0 for the new viz
                         solid(0, 0, 0, 0).out(o0);
                         
-                        // Sample video colors
-                        const color = getVideoColor(0);
+                        // Make sure video is properly captured for geometric effect
+                        if (videoBackgroundActive) {
+                            src(s0).out(o3);
+                        }
+                        
+                        // Sample video colors (use defaults if video not active)
+                        const color = videoBackgroundActive ? getVideoColor(0) : {r: 200, g: 200, b: 200};
                         const normalizedColor = {
                             r: color.r / 255, 
                             g: color.g / 255, 
                             b: color.b / 255
                         };
                         
-                        // Run geometric with video colors
+                        // Always use the enhanced version with video color influence
                         runGeometricWithColors(
                             transitionLevel,
                             isSilent,
@@ -1301,8 +1355,14 @@ setupAudio().then((audioData) => {
                             normalizedColor
                         );
                         
-                        // Blend back with stored output
-                        src(o0).blend(src(o2), 0.7).out(o0);
+                        // Blend back with stored output - different blend for video vs non-video
+                        if (videoBackgroundActive) {
+                            // When video is active, use layer blend to preserve video content
+                            src(o0).layer(src(o2).mult(solid(1,1,1,0.7))).out(o0);
+                        } else {
+                            // Without video, use standard blend
+                            src(o0).blend(src(o2), 0.7).out(o0);
+                        }
                     } catch (err) {
                         console.warn("Error running geometric visualization:", err);
                         // Fall back to standard rendering
@@ -1373,6 +1433,11 @@ function runGeometricWithColors(audioLevel, isSilent, opacity, color) {
         const colorMultiplier = Math.max(0.3, (color.r + color.g + color.b) / 3);
         const hue = (color.r * 0.3 + color.g * 0.59 + color.b * 0.11) * 360;
         
+        // Make sure video is in buffer o3
+        if (videoBackgroundActive) {
+            src(s0).out(o3);
+        }
+        
         // Create a custom version of the geometric visualization with color influence
         shape(4) // square base shape
             .color(color.r, color.g, color.b) // Use video colors
@@ -1386,7 +1451,55 @@ function runGeometricWithColors(audioLevel, isSilent, opacity, color) {
                     .color(color.r, color.g, color.b)
                     .brightness(() => -0.5 + audioLevel * 1)
             )
-            .out(o0);
+            .out(o1);
+            
+        // Create second geometric layer with different parameters
+        shape(3)
+            .color(color.b, color.r, color.g) // Different color order for variety
+            .scale(() => 0.8 + audioLevel * 1.5)
+            .rotate(() => -time * 0.15)
+            .modulateRotate(osc(4, 0.1, 0), () => 0.5 + audioLevel * 1)
+            .kaleid(() => Math.floor(4 + audioLevel * 4))
+            .out(o2);
+            
+        // Blend with video source when active
+        if (videoBackgroundActive) {
+            // Start with video source
+            src(o3)
+                // Add geometric patterns with blend modes that work well with video
+                .layer(
+                    src(o1)
+                    .mask(
+                        src(o1).thresh(0.3 + audioLevel * 0.2)
+                    )
+                    .mult(solid(1, 1, 1, () => 0.6 + audioLevel * 0.4))
+                )
+                .layer(
+                    src(o2)
+                    .mask(
+                        src(o2).thresh(0.4 + audioLevel * 0.2)
+                    )
+                    .mult(solid(1, 1, 1, () => 0.5 + audioLevel * 0.3))
+                )
+                // Enhance video with slight color modulation
+                .modulate(
+                    src(o3).pixelate(50, 50),
+                    0.02
+                )
+                .mult(solid(1, 1, 1, opacity))
+                .out(o0);
+        } else {
+            // Without video, blend the geometric patterns differently
+            src(o1)
+                .diff(src(o2))
+                .modulate(
+                    noise(3, 0.1),
+                    () => 0.05 + audioLevel * 0.1
+                )
+                .color(color.r, color.g, color.b)
+                .mult(solid(1, 1, 1, opacity))
+                .out(o0);
+        }
     } catch (err) {
         console.warn("Error in geometric color visualization:", err);
         // Fall back to standard geometric visualization
@@ -1563,63 +1676,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
-    
-    // Add a button to toggle between single and multi-visualization modes
-    const buttonGroup = document.querySelector('.button-group');
-    if (buttonGroup && !document.querySelector('.multi-viz-toggle')) {
-        const toggleButton = document.createElement('button');
-        toggleButton.className = 'multi-viz-toggle';
-        toggleButton.textContent = 'Enable Multi-Viz Mode';
-        toggleButton.style.marginTop = '10px';
-        toggleButton.style.padding = '5px';
-        toggleButton.style.backgroundColor = 'rgba(70, 130, 180, 0.6)';
-        toggleButton.style.border = 'none';
-        toggleButton.style.borderRadius = '3px';
-        toggleButton.style.color = 'white';
-        toggleButton.style.cursor = 'pointer';
-        
-        toggleButton.addEventListener('click', function() {
-            const isMultiMode = this.classList.contains('active');
-            
-            if (isMultiMode) {
-                // Switching to single mode
-                this.classList.remove('active');
-                this.textContent = 'Enable Multi-Viz Mode';
-                this.style.backgroundColor = 'rgba(70, 130, 180, 0.6)';
-                
-                // If we have multiple visualizations, keep only the first one
-                if (activeVisualizations.size > 1) {
-                    const firstViz = Array.from(activeVisualizations)[0];
-                    activeVisualizations.clear();
-                    activeVisualizations.add(firstViz);
-                    currentViz = firstViz;
-                    
-                    // Update UI
-                    updateVisualizationUI();
-                }
-                
-                // Stop color sampling if it's active
-                if (isColorSamplingActive) {
-                    stopColorSampling();
-                }
-            } else {
-                // Switching to multi mode
-                this.classList.add('active');
-                this.textContent = 'Disable Multi-Viz Mode';
-                this.style.backgroundColor = 'rgba(220, 20, 60, 0.6)';
-                
-                // Start color sampling if video is active
-                if (videoBackgroundActive) {
-                    startColorSampling();
-                }
-                
-                // Show helper tip
-                alert('Multi-visualization mode enabled! Click on multiple visualization buttons to layer them. The video background colors will be sampled to influence the visualizations.');
-            }
-        });
-        
-        buttonGroup.parentElement.appendChild(toggleButton);
-    }
 });
 
 // Update visualization buttons based on active set
@@ -1666,7 +1722,7 @@ function updateVisualizationUI() {
                 startColorSampling();
             }
         } else {
-            helperMessage.textContent = 'Click to select or Ctrl+click for multiple';
+            helperMessage.textContent = 'Click visualizations to toggle them on/off';
             // Stop color sampling if not needed
             if (isColorSamplingActive && !videoBackgroundActive) {
                 stopColorSampling();
@@ -1694,6 +1750,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const vizButtons = document.querySelectorAll('.viz-button');
         
         vizButtons.forEach(button => {
+            // Process all buttons, including VHS
             button.addEventListener('click', (e) => {
                 e.preventDefault(); // Prevent default to handle everything ourselves
                 
@@ -1703,121 +1760,57 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Debug log
                 console.log(`Toggling visualization: ${selectedViz}`);
                 
-                // Special handling for VHS Tape - needs to be exclusive
-                if (selectedViz === 'vhsTape') {
-                    // If VHS is being deactivated
-                    if (activeVisualizations.has('vhsTape')) {
-                        // VHS is active, deactivate it
-                        activeVisualizations.delete('vhsTape');
-                        
-                        // Deactivate external VHS effect if it exists
-                        if (typeof window.isVHSActive !== 'undefined' && window.isVHSActive) {
-                            if (typeof window.deactivateVHSEffect === 'function') {
-                                try {
-                                    window.deactivateVHSEffect();
-                                    console.log("Deactivated external VHS effect");
-                                } catch (err) {
-                                    console.warn("Error deactivating external VHS effect:", err);
-                                }
-                            }
-                        }
-                        
-                        // Update UI
-                        updateVisualizationUI();
-                        
-                        // Keep video state consistent
-                        setTimeout(() => {
-                            if (videoBackgroundActive) {
-                                enforceVideoVisibility(true);
-                            }
-                        }, 100);
-                        
-                        return;
-                    } else {
-                        // VHS is not active, make it the only active visualization
-                        activeVisualizations.clear();
-                        activeVisualizations.add('vhsTape');
-                        
-                        // Activate external VHS effect
-                        if (typeof window.activateVHSEffect === 'function') {
-                            try {
-                                const hydraCanvas = document.getElementById('hydra-canvas');
-                                window.activateVHSEffect(hydraCanvas);
-                                console.log("Activated external VHS effect");
-                            } catch (err) {
-                                console.warn("Error activating external VHS effect:", err);
-                            }
-                        }
-                        
-                        // Update UI
-                        updateVisualizationUI();
-                        return;
-                    }
-                }
-                
                 // Check if the visualization exists
                 if (visualizations[selectedViz]) {
-                    // If VHS is currently active, deactivate it first
-                    if (activeVisualizations.has('vhsTape')) {
-                        activeVisualizations.delete('vhsTape');
+                    // Toggle the selected visualization
+                    if (activeVisualizations.has(selectedViz)) {
+                        // Toggle off if already active
+                        activeVisualizations.delete(selectedViz);
+                        console.log(`Removed ${selectedViz} from active visualizations`);
                         
-                        // Deactivate external VHS effect
-                        if (typeof window.isVHSActive !== 'undefined' && window.isVHSActive) {
-                            if (typeof window.deactivateVHSEffect === 'function') {
-                                try {
-                                    window.deactivateVHSEffect();
-                                    console.log("Deactivated external VHS effect");
-                                } catch (err) {
-                                    console.warn("Error deactivating external VHS effect:", err);
+                        // For VHS, handle special effect deactivation
+                        if (selectedViz === 'vhsTape') {
+                            // Ensure video is properly handled
+                            if (!videoBackgroundActive) {
+                                const videoBackground = document.getElementById('video-background');
+                                if (videoBackground) {
+                                    videoBackground.style.opacity = '0';
                                 }
                             }
                         }
-                    }
-                
-                    // For all other visualizations - handle multi-select or toggle
-                    if (e.ctrlKey || e.metaKey) {
-                        // Multi-select mode (Ctrl/Cmd + click)
-                        if (activeVisualizations.has(selectedViz)) {
-                            // Toggle off if already active
-                            activeVisualizations.delete(selectedViz);
-                            console.log(`Removed ${selectedViz} from active visualizations`);
-                        } else {
-                            // Add to active visualizations
-                            activeVisualizations.add(selectedViz);
-                            console.log(`Added ${selectedViz} to active visualizations`);
-                        }
                     } else {
-                        // Single-select mode (normal click) - just toggle the clicked one
-                        if (activeVisualizations.has(selectedViz)) {
-                            // If this is the only active visualization, keep it active
-                            if (activeVisualizations.size > 1) {
-                                activeVisualizations.delete(selectedViz);
-                            }
-                        } else {
-                            // Clear others and set this as the only active one
-                            activeVisualizations.clear();
-                            activeVisualizations.add(selectedViz);
-                        }
+                        // Add to active visualizations
+                        activeVisualizations.add(selectedViz);
+                        console.log(`Added ${selectedViz} to active visualizations`);
                         
                         // Update currentViz for compatibility with old code
                         currentViz = selectedViz;
-                    }
-                    
-                    // Special handling for geometric effect
-                    if (selectedViz === 'geometric' && activeVisualizations.has('geometric')) {
-                        // Ensure geometric gets proper initialization
-                        try {
-                            // Force geometry shader to reinitialize with proper params
-                            console.log("Ensuring geometric visualization is properly initialized");
-                            
-                            // Add any special initialization for geometric here if needed
-                            
-                            // Start color sampling for geometric visualization
-                            if (!isColorSamplingActive) {
-                                startColorSampling();
+                        
+                        // For VHS, ensure video is activated
+                        if (selectedViz === 'vhsTape') {
+                            // Make sure video is showing for VHS effect
+                            const videoToggle = document.getElementById('video-toggle');
+                            if (videoToggle && !videoToggle.checked) {
+                                videoToggle.checked = true;
+                                updateVideoBackground(true);
                             }
-                        } catch (err) {
-                            console.warn("Error initializing geometric visualization:", err);
+                            
+                            // Ensure video is visible
+                            const videoElement = document.getElementById('video-background');
+                            if (videoElement) {
+                                videoElement.style.display = 'block';
+                                videoElement.style.opacity = '1.0';
+                                
+                                // Try to play the video if it's paused
+                                if (videoElement.paused) {
+                                    videoElement.play().catch(err => {
+                                        console.warn("Error playing video:", err);
+                                    });
+                                }
+                            }
+                            
+                            // Force enable video for VHS effect
+                            videoBackgroundActive = true;
                         }
                     }
                     
@@ -1836,6 +1829,11 @@ document.addEventListener('DOMContentLoaded', () => {
                         solid(0, 0, 0, 0).out(o3);
                     }
                     
+                    // Start color sampling if multiple visualizations
+                    if (activeVisualizations.size > 1 && videoBackgroundActive && !isColorSamplingActive) {
+                        startColorSampling();
+                    }
+                    
                     // Log active visualizations
                     console.log(`Currently active: ${Array.from(activeVisualizations).join(', ')}`);
                 } else {
@@ -1849,7 +1847,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (buttonGroup && !document.querySelector('.multi-select-helper')) {
             const helperMessage = document.createElement('div');
             helperMessage.className = 'multi-select-helper';
-            helperMessage.textContent = 'Ctrl+click to select multiple visualizations';
+            helperMessage.textContent = 'Click visualizations to toggle them on/off';
             helperMessage.style.color = 'white';
             helperMessage.style.fontSize = '12px';
             helperMessage.style.opacity = '0.7';
@@ -1956,6 +1954,13 @@ window.resetViz = function() {
             updateVisualizationUI();
         }
     }
+    
+    // If no visualization is active, default to chalk
+    if (activeVisualizations.size === 0) {
+        activeVisualizations.add('chalk');
+        currentViz = 'chalk';
+        updateVisualizationUI();
+    }
 };
 
 // Add a global function to activate the VHS visualization
@@ -1974,6 +1979,56 @@ window.activateVHSVisualization = function() {
         activeVisualizations.add('vhsTape');
         updateVisualizationUI();
     }
+    
+    // Ensure video is active
+    videoBackgroundActive = true;
+    const videoToggle = document.getElementById('video-toggle');
+    if (videoToggle && !videoToggle.checked) {
+        videoToggle.checked = true;
+        updateVideoBackground(true);
+    }
+    
+    // Force activation of external VHS effect
+    if (typeof window.activateVHSEffect === 'function') {
+        const hydraCanvas = document.getElementById('hydra-canvas');
+        try {
+            window.activateVHSEffect(hydraCanvas);
+            console.log("Activated external VHS effect from global activator");
+        } catch (err) {
+            console.warn("Error activating external VHS effect:", err);
+        }
+    }
+    
+    // Run the VHS visualization immediately
+    if (visualizations.vhsTape) {
+        visualizations.vhsTape(0.5, false, 1.0);
+    }
+};
+
+// Add global function to deactivate VHS specifically
+window.deactivateVHSVisualization = function() {
+    console.log("Deactivating VHS visualization");
+    
+    // Remove VHS from active visualizations
+    activeVisualizations.delete('vhsTape');
+    
+    // Deactivate external VHS effect
+    if (typeof window.deactivateVHSEffect === 'function' && typeof window.isVHSActive !== 'undefined' && window.isVHSActive) {
+        try {
+            window.deactivateVHSEffect();
+            console.log("Deactivated external VHS effect");
+        } catch (err) {
+            console.warn("Error deactivating external VHS effect:", err);
+        }
+    }
+    
+    // Update UI
+    const vhsButton = document.querySelector('.viz-button[data-viz="vhsTape"]');
+    if (vhsButton) {
+        vhsButton.classList.remove('active');
+    }
+    
+    updateVisualizationUI();
 };
 
 // Add video color sampling functionality
@@ -2113,4 +2168,72 @@ function getVideoColor(index = 0, fallbackColor = {r: 255, g: 255, b: 255}) {
     // Ensure index is within bounds
     const safeIndex = Math.min(index, videoColors.length - 1);
     return videoColors[safeIndex] || fallbackColor;
-} 
+}
+
+// Remove the custom VHS Button handler
+document.addEventListener('DOMContentLoaded', function() {
+    // No special VHS button handler needed here - remove this entire block
+});
+
+// Add core VHS effect functionality
+// Simple VHS effect implementation
+window.activateVHSEffect = function(canvas) {
+    console.log("Activating VHS effect");
+    
+    // Set flag to track VHS state
+    window.isVHSActive = true;
+    
+    // Apply video filter effects
+    const video = document.getElementById('video-background');
+    if (video) {
+        video.style.filter = 'saturate(115%) contrast(105%) brightness(105%)';
+    }
+    
+    // Apply canvas filter for VHS look
+    if (canvas) {
+        canvas.style.filter = 'saturate(130%) contrast(110%) brightness(110%) blur(0.5px)';
+    }
+    
+    return true;
+};
+
+window.deactivateVHSEffect = function() {
+    console.log("Deactivating VHS effect");
+    
+    // Reset VHS active flag
+    window.isVHSActive = false;
+    
+    // Reset canvas effects
+    const canvas = document.getElementById('hydra-canvas');
+    if (canvas) {
+        canvas.style.filter = 'none';
+        canvas.style.transform = 'none';
+    }
+    
+    // Reset video element
+    const video = document.getElementById('video-background');
+    if (video) {
+        video.style.filter = 'none';
+    }
+    
+    return true;
+};
+
+// Simple function to update VHS effect with audio levels
+window.updateVHSAudio = function(audioLevel) {
+    if (!window.isVHSActive) return false;
+    
+    // Apply audio-reactive effects to canvas
+    const canvas = document.getElementById('hydra-canvas');
+    if (!canvas) return false;
+    
+    // Scale audio level for more visible effect
+    const scaledLevel = Math.max(0.1, Math.min(1.0, audioLevel * 2));
+    
+    // Add audio-reactive filters
+    const saturation = 120 + (scaledLevel * 30);
+    const contrast = 105 + (scaledLevel * 15);
+    canvas.style.filter = `saturate(${saturation}%) contrast(${contrast}%) brightness(110%) blur(0.5px)`;
+    
+    return true;
+};
