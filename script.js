@@ -1,7 +1,7 @@
 // Initialize Hydra with full window size
 const hydra = new Hydra({
     canvas: document.getElementById('hydra-canvas'),
-    detectAudio: false,
+    detectAudio: false,  // We'll handle audio ourselves
     width: window.innerWidth,
     height: window.innerHeight
 });
@@ -129,8 +129,8 @@ async function setupAudio() {
         const source = audioContext.createMediaStreamSource(stream);
         const analyser = audioContext.createAnalyser();
 
-        analyser.fftSize = 256; // Smaller for faster response
-        analyser.smoothingTimeConstant = 0.6; // Smoothing for better transitions
+        analyser.fftSize = 1024; // Increased for better frequency resolution
+        analyser.smoothingTimeConstant = 0.4; // Reduced for faster response
         const bufferLength = analyser.frequencyBinCount;
         const dataArray = new Uint8Array(bufferLength);
 
@@ -324,49 +324,84 @@ const visualizations = {
             return;
         }
         
-        // Standard geometric effect (used when video is not active)
-        // Base pattern
-        shape(4, 0.4, 0)
-            .repeat(() => 3 + level * 5, () => 3 + level * 5)
-            .scale(() => 0.5 + level * 2)
-            .rotate(() => time * 0.1)
-            .kaleid(() => Math.floor(3 + level * 8))
-            .scale(1.5)
-            .out(o0);
-            
-        // Modulated pattern
-        shape(3, 0.3, 0.01)
-            .scale(() => 2 + level * 3)
-            .rotate(() => time * -0.2)
-            .color(1, 1, 1)
-            .mult(
-                osc(20, 0.1, 0)
-                .rotate(() => time * 0.05)
+        // During silence, show a minimal static version
+        if (isSilent) {
+            // Minimal static pattern during silence
+            shape(4, 0.4, 0)
+                .repeat(3, 3)
+                .scale(0.5)
+                .kaleid(3)
+                .scale(1.5)
+                .mult(solid(1, 1, 1, 0.1)) // Very low opacity during silence
+                .out(o0);
+                
+            // Even more minimal second layer
+            shape(3, 0.3, 0.01)
                 .scale(2)
-            )
-            .modulate(
-                noise(3, 0.1).scale(5),
-                () => 0.2 + level * 0.3
-            )
-            .out(o1);
-            
-        // Combined geometry
-        src(o0)
-            .diff(src(o1))
-            .out(o2);
-            
-        // Final output with geometric style
-        src(o2)
-            .modulate(
-                src(o2).rotate(0.1).scale(1.01),
-                0.1
-            )
-            .color(1, 1, 1)
-            .contrast(1.2)
-            .saturate(0)
-            .scale(1.5) // Fill screen
-            .mult(solid(1, 1, 1, () => opacity))
-            .out();
+                .color(1, 1, 1)
+                .mult(solid(1, 1, 1, 0.05)) // Even lower opacity
+                .out(o1);
+                
+            // Combined geometry at low opacity
+            src(o0)
+                .diff(src(o1))
+                .out(o2);
+                
+            // Final output with greatly reduced opacity during silence
+            src(o2)
+                .color(1, 1, 1)
+                .contrast(1.2)
+                .saturate(0)
+                .scale(1.5) // Fill screen
+                .mult(solid(1, 1, 1, () => opacity * 0.2)) // Significantly reduced opacity
+                .out();
+        }
+        // Normal audio-reactive mode
+        else {
+            // Standard geometric effect (used when video is not active)
+            // Base pattern
+            shape(4, 0.4, 0)
+                .repeat(() => 3 + level * 5, () => 3 + level * 5)
+                .scale(() => 0.5 + level * 2)
+                .rotate(() => time * 0.1)
+                .kaleid(() => Math.floor(3 + level * 8))
+                .scale(1.5)
+                .out(o0);
+                
+            // Modulated pattern
+            shape(3, 0.3, 0.01)
+                .scale(() => 2 + level * 3)
+                .rotate(() => time * -0.2)
+                .color(1, 1, 1)
+                .mult(
+                    osc(20, 0.1, 0)
+                    .rotate(() => time * 0.05)
+                    .scale(2)
+                )
+                .modulate(
+                    noise(3, 0.1).scale(5),
+                    () => 0.2 + level * 0.3
+                )
+                .out(o1);
+                
+            // Combined geometry
+            src(o0)
+                .diff(src(o1))
+                .out(o2);
+                
+            // Final output with geometric style
+            src(o2)
+                .modulate(
+                    src(o2).rotate(0.1).scale(1.01),
+                    0.1
+                )
+                .color(1, 1, 1)
+                .contrast(1.2)
+                .saturate(0)
+                .scale(1.5) // Fill screen
+                .mult(solid(1, 1, 1, () => opacity))
+                .out();
+        }
     },
 
     // Particle system
@@ -1162,11 +1197,11 @@ setupAudio().then((audioData) => {
     const { analyser, dataArray, bufferLength } = audioData;
     
     // Constants for silence detection
-    const SILENCE_THRESHOLD = 5; // Threshold below which we consider silence
-    const FADE_SPEED = 0.05; // Speed of fade to black during silence
+    const SILENCE_THRESHOLD = 2; // Lowered threshold for better sensitivity
+    const FADE_SPEED = 0.05;     // Keep the same fade speed
     
     // State variables
-    let currentOpacity = 0;
+    let currentOpacity = 1;
     let silenceFrames = 0;
     let lastAudioLevel = 0;
     
@@ -1176,12 +1211,22 @@ setupAudio().then((audioData) => {
         // Get the frequency data
         analyser.getByteFrequencyData(dataArray);
         
-        // Calculate overall audio level
+        // Calculate overall audio level with emphasis on mids and highs
         let totalSum = 0;
+        let weightedSum = 0;
         for (let i = 0; i < bufferLength; i++) {
-            totalSum += dataArray[i];
+            const value = dataArray[i];
+            totalSum += value;
+            
+            // Apply frequency weighting (emphasize mid-high frequencies)
+            if (i > bufferLength * 0.1) { // Skip the lowest frequencies
+                const weight = i < bufferLength * 0.7 ? 1.5 : 2.0; // Boost mids and highs
+                weightedSum += value * weight;
+            }
         }
-        const audioLevel = totalSum / bufferLength;
+        
+        // Use weighted sum for more sensitivity to voice and music
+        const audioLevel = weightedSum / (bufferLength * 1.5); // Normalize based on weighting
         
         // Silence detection
         const isSilent = audioLevel < SILENCE_THRESHOLD;
@@ -1200,16 +1245,16 @@ setupAudio().then((audioData) => {
             }
         }
         
-        // Normalize audio level (0-1)
-        const normalizedLevel = Math.min(1, audioLevel / 128);
+        // Normalize audio level (0-1) with higher gain for better reactivity
+        const normalizedLevel = Math.min(1, audioLevel / 80); // Lower divisor for more sensitivity
         
         // Store last non-zero audio level for transitions
         if (normalizedLevel > 0.05) {
             lastAudioLevel = normalizedLevel;
         }
         
-        // Use a transition level to avoid abrupt changes
-        const transitionLevel = isSilent ? Math.max(0.05, lastAudioLevel * 0.3) : normalizedLevel;
+        // Use a transition level to avoid abrupt changes but be more responsive
+        const transitionLevel = isSilent ? Math.max(0.05, lastAudioLevel * 0.4) : normalizedLevel;
         
         // Update the VHS effect with audio level, if the function exists
         if (typeof window.updateVHSAudio === 'function') {
@@ -1337,72 +1382,118 @@ function runGeometricWithColors(audioLevel, isSilent, opacity, color) {
         const colorMultiplier = Math.max(0.3, (color.r + color.g + color.b) / 3);
         const hue = (color.r * 0.3 + color.g * 0.59 + color.b * 0.11) * 360;
         
+        // Amplify audio level for more reactive visuals
+        const amplifiedLevel = Math.min(1.0, audioLevel * 1.8);
+        
         // Make sure video is in buffer o3
         if (videoBackgroundActive) {
             src(s0).out(o3);
         }
         
-        // Create a custom version of the geometric visualization with color influence
-        shape(4) // square base shape
-            .color(color.r, color.g, color.b) // Use video colors
-            .scale(() => 1.5 + audioLevel * 2) // Scale based on audio
-            .rotate(() => time * 0.1)
-            .repeat(() => Math.floor(3 + audioLevel * 5)) // More repetition with louder audio
-            .kaleid(() => Math.floor(2 + audioLevel * 3))
-            .scale(() => 0.9 + audioLevel * 0.3)
-            .modulate(
-                noise(() => 2 + audioLevel * 5)
+        // During silence, show a minimal static version of the effect
+        if (isSilent) {
+            // Create minimal static version during silence
+            shape(4) // square base shape
+                .color(color.r * 0.5, color.g * 0.5, color.b * 0.5) // Dimmed colors
+                .scale(1.5) // Fixed scale
+                .repeat(3, 3) // Fixed repeat
+                .kaleid(2) // Minimal kaleidoscope
+                .mult(solid(1, 1, 1, 0.2)) // Very low opacity
+                .out(o1);
+                
+            shape(3) // triangle
+                .color(color.b * 0.5, color.r * 0.5, color.g * 0.5) // Dimmed colors
+                .scale(0.8) // Fixed scale
+                .kaleid(4) // Fixed kaleidoscope
+                .mult(solid(1, 1, 1, 0.1)) // Very low opacity
+                .out(o2);
+                
+            // Output with extremely low opacity during silence
+            if (videoBackgroundActive) {
+                src(o3)
+                    .layer(
+                        src(o1)
+                        .mask(src(o1).thresh(0.3))
+                        .mult(solid(1, 1, 1, 0.2))
+                    )
+                    .layer(
+                        src(o2)
+                        .mask(src(o2).thresh(0.4))
+                        .mult(solid(1, 1, 1, 0.1))
+                    )
+                    .mult(solid(1, 1, 1, opacity * 0.3)) // Further reduce opacity during silence
+                    .out(o0);
+            } else {
+                src(o1)
+                    .diff(src(o2))
+                    .mult(solid(1, 1, 1, opacity * 0.2)) // Very low opacity during silence
+                    .out(o0);
+            }
+        }
+        // Normal audio-reactive mode
+        else {
+            // Create a custom version of the geometric visualization with color influence
+            shape(4) // square base shape
+                .color(color.r, color.g, color.b) // Use video colors
+                .scale(() => 1.5 + amplifiedLevel * 3) // Increased audio influence
+                .rotate(() => time * 0.1 + amplifiedLevel * 0.3) // Add audio influence to rotation
+                .repeat(() => Math.floor(3 + amplifiedLevel * 8)) // More repetition with louder audio
+                .kaleid(() => Math.floor(2 + amplifiedLevel * 5))
+                .scale(() => 0.9 + amplifiedLevel * 0.5)
+                .modulate(
+                    noise(() => 2 + amplifiedLevel * 8)
+                        .color(color.r, color.g, color.b)
+                        .brightness(() => -0.5 + amplifiedLevel * 1.5)
+                )
+                .out(o1);
+                
+            // Create second geometric layer with different parameters
+            shape(3)
+                .color(color.b, color.r, color.g) // Different color order for variety
+                .scale(() => 0.8 + amplifiedLevel * 2.5) // Increased audio influence
+                .rotate(() => -time * 0.15 - amplifiedLevel * 0.5) // Add counter-rotation with audio
+                .modulateRotate(osc(4, 0.1, 0), () => 0.5 + amplifiedLevel * 1.5)
+                .kaleid(() => Math.floor(4 + amplifiedLevel * 6))
+                .out(o2);
+                
+            // Blend with video source when active
+            if (videoBackgroundActive) {
+                // Start with video source
+                src(o3)
+                    // Add geometric patterns with blend modes that work well with video
+                    .layer(
+                        src(o1)
+                        .mask(
+                            src(o1).thresh(0.3 + amplifiedLevel * 0.2)
+                        )
+                        .mult(solid(1, 1, 1, () => 0.6 + amplifiedLevel * 0.4))
+                    )
+                    .layer(
+                        src(o2)
+                        .mask(
+                            src(o2).thresh(0.4 + amplifiedLevel * 0.2)
+                        )
+                        .mult(solid(1, 1, 1, () => 0.5 + amplifiedLevel * 0.3))
+                    )
+                    // Enhance video with slight color modulation
+                    .modulate(
+                        src(o3).pixelate(50, 50),
+                        0.02
+                    )
+                    .mult(solid(1, 1, 1, opacity))
+                    .out(o0);
+            } else {
+                // Without video, blend the geometric patterns differently
+                src(o1)
+                    .diff(src(o2))
+                    .modulate(
+                        noise(3, 0.1),
+                        () => 0.05 + amplifiedLevel * 0.1
+                    )
                     .color(color.r, color.g, color.b)
-                    .brightness(() => -0.5 + audioLevel * 1)
-            )
-            .out(o1);
-            
-        // Create second geometric layer with different parameters
-        shape(3)
-            .color(color.b, color.r, color.g) // Different color order for variety
-            .scale(() => 0.8 + audioLevel * 1.5)
-            .rotate(() => -time * 0.15)
-            .modulateRotate(osc(4, 0.1, 0), () => 0.5 + audioLevel * 1)
-            .kaleid(() => Math.floor(4 + audioLevel * 4))
-            .out(o2);
-            
-        // Blend with video source when active
-        if (videoBackgroundActive) {
-            // Start with video source
-            src(o3)
-                // Add geometric patterns with blend modes that work well with video
-                .layer(
-                    src(o1)
-                    .mask(
-                        src(o1).thresh(0.3 + audioLevel * 0.2)
-                    )
-                    .mult(solid(1, 1, 1, () => 0.6 + audioLevel * 0.4))
-                )
-                .layer(
-                    src(o2)
-                    .mask(
-                        src(o2).thresh(0.4 + audioLevel * 0.2)
-                    )
-                    .mult(solid(1, 1, 1, () => 0.5 + audioLevel * 0.3))
-                )
-                // Enhance video with slight color modulation
-                .modulate(
-                    src(o3).pixelate(50, 50),
-                    0.02
-                )
-                .mult(solid(1, 1, 1, opacity))
-                .out(o0);
-        } else {
-            // Without video, blend the geometric patterns differently
-            src(o1)
-                .diff(src(o2))
-                .modulate(
-                    noise(3, 0.1),
-                    () => 0.05 + audioLevel * 0.1
-                )
-                .color(color.r, color.g, color.b)
-                .mult(solid(1, 1, 1, opacity))
-                .out(o0);
+                    .mult(solid(1, 1, 1, opacity))
+                    .out(o0);
+            }
         }
     } catch (err) {
         console.warn("Error in geometric color visualization:", err);
